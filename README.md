@@ -18,13 +18,11 @@ whichever runtime the user needs them to use.
 
 For each lambda invocation, the following steps happen in order:
 
-1. The lambda event (an S3 event) is split into groups that represent single
-   triggers, according to configuration.
-2. For each trigger, the relevant input files are pulled from S3 and copied into
-   a temporary folder. A signature snapshot of each file is taken.
-3. The handler program is invoked for each trigger, and each temporary folder is
-   given as an environment variable.
-4. After the handler program exits, another signature snapshot is taken from the
+1. The relevant input files are pulled from S3 and copied into a temporary
+   folder. A signature snapshot of each file is taken.
+2. The handler program is invoked. The temporary folder is passed to the handler
+   program as an environment variable.
+3. After the handler program exits, another signature snapshot is taken from the
    files in the temporary folder. Each signature difference from the one in step
    2 causes the event bridge to upload the files to S3 (to the same bucket, or a
    new one).
@@ -41,7 +39,7 @@ Configuration is achieved via the following environment variables:
   key is located. `0` means to pull just the folder containing the key. A
   negative number is interpreted to mean the whole bucket. This parameter is
   relevant to consider the structure of outputs, since they will be located
-  somewhere in the hierarchy starting from this folder. Default value is `1`.
+  somewhere in the hierarchy starting from this folder. Default value is `0`.
 - `PULL_MATCH_KEYS` is a comma-separated list of patterns used to select files
   being pulled to serve as inputs. If omitted, it will default to matching all
   files. If not omitted, it's up to the user to include the same pattern as

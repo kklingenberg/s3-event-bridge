@@ -2,11 +2,6 @@
 
 use serde::Deserialize;
 
-/// Default `pull_parent_dirs` value.
-fn default_pull_parent_dirs() -> i32 {
-    1
-}
-
 /// Default `root_folder_var` value.
 fn default_root_folder_var() -> String {
     String::from("ROOT_FOLDER")
@@ -30,7 +25,7 @@ pub struct Settings {
     /// amount of folders, the whole bucket will also be pulled. A
     /// negative value also is interpreted as pulling the whole
     /// bucket.
-    #[serde(default = "default_pull_parent_dirs")]
+    #[serde(default)]
     pub pull_parent_dirs: i32,
 
     /// Defines filters to pull only matching keys, after having

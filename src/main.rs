@@ -1,19 +1,16 @@
 mod app;
 mod client;
 mod conf;
-mod trigger;
+mod sign;
 
 use anyhow::{anyhow, Result};
 use aws_lambda_events::event::s3::S3Event;
 use lambda_runtime::{run, service_fn, LambdaEvent};
 
-/// Batch the records within the S3 Event into groups of compatible
-/// keys, and handle each group as a unique invocation of the handler
-/// command.
+/// Handle each S3 event record through the handler program
 async fn function_handler(event: LambdaEvent<S3Event>) -> Result<()> {
-    let triggers = trigger::Trigger::from(&event.payload);
-    for trigger in triggers {
-        app::current().handle(&trigger, &client::current()).await?;
+    for record in event.payload.records {
+        app::current().handle(&record, client::current()).await?;
     }
     Ok(())
 }

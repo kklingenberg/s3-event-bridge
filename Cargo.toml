@@ -18,8 +18,8 @@ edition = "2021"
 anyhow = "1.0.69"
 aws-config = "0.54.1"
 aws-sdk-s3 = "0.24.0"
-aws-smithy-http = "0.54.4"
 aws_lambda_events = { version = "0.7.3", default-features = false, features = ["s3"] }
+base64ct = { version = "1.6.0", features = ["alloc"] }
 envy = "0.4.2"
 lambda_runtime = "0.7"
 once_cell = "1.17.1"
@@ -28,7 +28,7 @@ serde = { version = "1.0.154", features = ["derive"] }
 sha1 = "0.10.5"
 shell-words = "1.1.0"
 tempfile = "3.4.0"
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["macros", "process", "rt", "fs", "io-util"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 

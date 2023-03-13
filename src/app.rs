@@ -1,14 +1,18 @@
 //! Defines the read-only application state and hub for utility
 //! functions.
 
+use crate::client::{download, list_keys, upload};
 use crate::conf::Settings;
-use crate::trigger::Trigger;
+use crate::sign::{compute_signatures, find_signature_differences};
 use anyhow::{anyhow, Result};
+use aws_lambda_events::s3::S3EventRecord;
 use envy::from_env;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::cmp::max;
-use tracing::instrument;
+use tempfile::TempDir;
+use tokio::process::Command;
+use tracing::{info, instrument};
 
 /// An App is an initialized application state, derived from
 /// settings. This is only useful to pre-compute stuff that will be
@@ -71,9 +75,106 @@ impl App {
         })
     }
 
-    /// Handle an invocation trigger
+    /// Handle an S3 event record.
     #[instrument(skip(self, client))]
-    pub async fn handle(&self, trigger: &Trigger, client: &aws_sdk_s3::Client) -> Result<()> {
+    pub async fn handle(&self, record: &S3EventRecord, client: &aws_sdk_s3::Client) -> Result<()> {
+        let base_dir = TempDir::new()?;
+        let key = record
+            .s3
+            .object
+            .url_decoded_key
+            .as_ref()
+            .ok_or_else(|| anyhow!("S3 event record is missing an object key"))?;
+        if !self.match_key_re.is_match(key) {
+            info!(
+                key,
+                pattern = self.settings.match_key,
+                "S3 event record has object key that doesn't match configured pattern; ignoring"
+            );
+            return Ok(());
+        }
+        let bucket = record
+            .s3
+            .bucket
+            .name
+            .as_ref()
+            .ok_or_else(|| anyhow!("S3 event record is missing a bucket name"))?;
+        let target_bucket = self
+            .settings
+            .target_bucket
+            .clone()
+            .unwrap_or_else(|| bucket.clone());
+        let prefix = if self.settings.pull_parent_dirs < 0 {
+            String::from("")
+        } else {
+            let mut prefix_parts = key
+                .split('/')
+                .rev()
+                .skip((self.settings.pull_parent_dirs + 1).try_into().unwrap())
+                .collect::<Vec<&str>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<&str>>()
+                .join("/");
+            prefix_parts.push('/');
+            prefix_parts
+        };
+
+        // First: pull all relevant files from S3, and compute a
+        // signature for each file pulled
+        let mut next = None;
+        loop {
+            let (page, next_token) = list_keys(client, bucket, &prefix, &next).await?;
+            for page_key in page {
+                if self
+                    .pull_match_key_res
+                    .iter()
+                    .any(|re| re.is_match(&page_key))
+                {
+                    let filename = page_key.strip_prefix(&prefix).unwrap_or(&page_key);
+                    let local_path = base_dir.path().join(filename);
+                    download(client, bucket, &page_key, &local_path).await?;
+                }
+            }
+            if next_token.is_none() {
+                break;
+            } else {
+                next = next_token;
+            }
+        }
+        let signatures = compute_signatures(base_dir.path())?;
+
+        // Second: invoke the handler program
+        info!(
+            command = self.settings.handler_command,
+            "Invoking handler command"
+        );
+        let status = Command::new(&self.handler_command_program)
+            .args(&self.handler_command_args)
+            .env(&self.settings.root_folder_var, base_dir.path())
+            .status()
+            .await?;
+        if !status.success() {
+            info!("Handler command was not successful: {:?}", status);
+            return Ok(());
+        }
+
+        // Third: upload the changed files
+        let differences = find_signature_differences(base_dir.path(), &signatures)?;
+        info!(
+            total = differences.len(),
+            "Uploading files with found differences"
+        );
+        for path in differences {
+            let storage_key = path
+                .strip_prefix(base_dir.path())?
+                .to_str()
+                .ok_or_else(|| anyhow!("couldn't translate file path to object key: {:?}", path))?;
+            info!("Uploading file to {:?}", storage_key);
+            upload(client, &target_bucket, &path, storage_key).await?;
+        }
+
+        // Done
         Ok(())
     }
 }
