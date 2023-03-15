@@ -110,13 +110,15 @@ impl App {
             let mut prefix_parts = key
                 .split('/')
                 .rev()
-                .skip((self.settings.pull_parent_dirs + 1).try_into().unwrap())
+                .skip((self.settings.pull_parent_dirs + 1).try_into()?)
                 .collect::<Vec<&str>>()
                 .into_iter()
                 .rev()
                 .collect::<Vec<&str>>()
                 .join("/");
-            prefix_parts.push('/');
+            if !prefix_parts.is_empty() {
+                prefix_parts.push('/');
+            }
             prefix_parts
         };
 
@@ -155,7 +157,7 @@ impl App {
             .status()
             .await?;
         if !status.success() {
-            info!("Handler command was not successful: {:?}", status);
+            info!(status = ?status, "Handler command was not successful");
             return Ok(());
         }
 
@@ -170,7 +172,7 @@ impl App {
                 .strip_prefix(base_dir.path())?
                 .to_str()
                 .ok_or_else(|| anyhow!("couldn't translate file path to object key: {:?}", path))?;
-            info!("Uploading file to {:?}", storage_key);
+            info!(key = ?storage_key, "Uploading file");
             upload(client, &target_bucket, &path, storage_key).await?;
         }
 
