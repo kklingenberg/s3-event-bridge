@@ -79,6 +79,12 @@ impl App {
     #[instrument(skip(self, client))]
     pub async fn handle(&self, record: &S3EventRecord, client: &aws_sdk_s3::Client) -> Result<()> {
         let base_dir = TempDir::new()?;
+        let base_path = base_dir.into_path();
+        info!(
+            path = ?base_path,
+            "Created temporary directory to hold input and output files"
+        );
+
         let key = record
             .s3
             .object
@@ -124,6 +130,7 @@ impl App {
 
         // First: pull all relevant files from S3, and compute a
         // signature for each file pulled
+        info!("Downloading input files");
         let mut next = None;
         loop {
             let (page, next_token) = list_keys(client, bucket, &prefix, &next).await?;
@@ -134,7 +141,7 @@ impl App {
                     .any(|re| re.is_match(&page_key))
                 {
                     let filename = page_key.strip_prefix(&prefix).unwrap_or(&page_key);
-                    let local_path = base_dir.path().join(filename);
+                    let local_path = base_path.join(filename);
                     download(client, bucket, &page_key, &local_path).await?;
                 }
             }
@@ -144,7 +151,7 @@ impl App {
                 next = next_token;
             }
         }
-        let signatures = compute_signatures(base_dir.path())?;
+        let signatures = compute_signatures(&base_path)?;
 
         // Second: invoke the handler program
         info!(
@@ -153,7 +160,7 @@ impl App {
         );
         let status = Command::new(&self.handler_command_program)
             .args(&self.handler_command_args)
-            .env(&self.settings.root_folder_var, base_dir.path())
+            .env(&self.settings.root_folder_var, &base_path)
             .status()
             .await?;
         if !status.success() {
@@ -162,14 +169,14 @@ impl App {
         }
 
         // Third: upload the changed files
-        let differences = find_signature_differences(base_dir.path(), &signatures)?;
+        let differences = find_signature_differences(&base_path, &signatures)?;
         info!(
             total = differences.len(),
             "Uploading files with found differences"
         );
         for path in differences {
             let storage_key = path
-                .strip_prefix(base_dir.path())?
+                .strip_prefix(&base_path)?
                 .to_str()
                 .ok_or_else(|| anyhow!("couldn't translate file path to object key: {:?}", path))?;
             info!(key = ?storage_key, "Uploading file");
