@@ -5,12 +5,15 @@ mod sign;
 
 use anyhow::{anyhow, Result};
 use aws_lambda_events::event::s3::S3Event;
+use aws_lambda_events::event::sqs::SqsEventObj;
 use lambda_runtime::{run, service_fn, LambdaEvent};
 
 /// Handle each S3 event record through the handler program
-async fn function_handler(event: LambdaEvent<S3Event>) -> Result<()> {
-    for record in event.payload.records {
-        app::current().handle(&record, client::current()).await?;
+async fn function_handler(event: LambdaEvent<SqsEventObj<S3Event>>) -> Result<()> {
+    for s3_event in event.payload.records {
+        for record in s3_event.body.records {
+            app::current().handle(&record, client::current()).await?;
+        }
     }
     Ok(())
 }

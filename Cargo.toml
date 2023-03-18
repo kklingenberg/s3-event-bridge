@@ -18,7 +18,7 @@ edition = "2021"
 anyhow = "1.0.69"
 aws-config = "0.54.1"
 aws-sdk-s3 = "0.24.0"
-aws_lambda_events = { version = "0.7.3", default-features = false, features = ["s3"] }
+aws_lambda_events = { version = "0.7.3", default-features = false, features = ["s3", "sqs"] }
 base64ct = { version = "1.6.0", features = ["alloc"] }
 envy = "0.4.2"
 lambda_runtime = "0.7"
