@@ -82,7 +82,7 @@ impl App {
         let key = record
             .s3
             .object
-            .url_decoded_key
+            .key
             .as_ref()
             .ok_or_else(|| anyhow!("S3 event record is missing an object key"))?;
         if !self.match_key_re.is_match(key) {
