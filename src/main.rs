@@ -3,7 +3,7 @@ mod client;
 mod conf;
 mod sign;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use aws_lambda_events::event::s3::S3Event;
 use aws_lambda_events::event::sqs::SqsEventObj;
 use lambda_runtime::{run, service_fn, LambdaEvent};
@@ -12,7 +12,10 @@ use lambda_runtime::{run, service_fn, LambdaEvent};
 async fn function_handler(event: LambdaEvent<SqsEventObj<S3Event>>) -> Result<()> {
     for s3_event in event.payload.records {
         for record in s3_event.body.records {
-            app::current().handle(&record, client::current()).await?;
+            app::current()
+                .handle(&record, client::current())
+                .await
+                .with_context(|| format!("Failed to handle record {:?}", &record))?;
         }
     }
     Ok(())

@@ -1,7 +1,7 @@
 //! Defines utilities for comparing the state of directories in terms
 //! of the files contained within.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64ct::{Base64, Encoding};
 use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
@@ -16,13 +16,18 @@ where
     F: FnMut(PathBuf) -> Result<()>,
 {
     if dir.is_dir() {
-        for entry in dir.read_dir()? {
-            let entry = entry?;
+        for entry in dir
+            .read_dir()
+            .with_context(|| format!("Failed to read directory {:?}", dir))?
+        {
+            let entry = entry.context("Failed to read directory entry")?;
             let path = entry.path();
             if path.is_dir() {
-                visit_dirs(&path, cb)?;
+                visit_dirs(&path, cb)
+                    .with_context(|| format!("Failed to visit directory {:?}", &path))?;
             } else {
-                cb(path.to_path_buf())?;
+                cb(path.to_path_buf())
+                    .with_context(|| format!("Failed to visit file {:?}", &path))?;
             }
         }
     }
@@ -31,9 +36,10 @@ where
 
 /// Produce a hash for the given path.
 fn hash_file(path: &Path) -> Result<String> {
-    let mut file = File::open(path)?;
+    let mut file = File::open(path).with_context(|| format!("Failed to open file {:?}", path))?;
     let mut hasher = Sha1::new();
-    copy(&mut file, &mut hasher)?;
+    copy(&mut file, &mut hasher)
+        .with_context(|| format!("Failed to hash file contents of {:?}", path))?;
     let hash = hasher.finalize();
     Ok(Base64::encode_string(&hash))
 }
@@ -42,10 +48,12 @@ fn hash_file(path: &Path) -> Result<String> {
 pub fn compute_signatures(path: &Path) -> Result<BTreeMap<PathBuf, String>> {
     let mut signatures = BTreeMap::new();
     visit_dirs(path, &mut |filepath| {
-        let hash = hash_file(&filepath)?;
+        let hash = hash_file(&filepath)
+            .with_context(|| format!("Failed to compute signature for file {:?}", &filepath))?;
         signatures.insert(filepath, hash);
         Ok(())
-    })?;
+    })
+    .with_context(|| format!("Failed to compute signature for directory {:?}", path))?;
     Ok(signatures)
 }
 
@@ -59,7 +67,8 @@ pub fn find_signature_differences(
     visit_dirs(path, &mut |filepath| {
         let presigned = snapshot.get(&filepath);
         if let Some(signature) = presigned {
-            let hash = hash_file(&filepath)?;
+            let hash = hash_file(&filepath)
+                .with_context(|| format!("Failed to compute signature for file {:?}", &filepath))?;
             if *signature != hash {
                 differences.push(filepath);
             }
@@ -67,6 +76,12 @@ pub fn find_signature_differences(
             differences.push(filepath);
         }
         Ok(())
+    })
+    .with_context(|| {
+        format!(
+            "Failed to compute signature differences for directory {:?}",
+            path
+        )
     })?;
     Ok(differences)
 }

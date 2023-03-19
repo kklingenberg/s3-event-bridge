@@ -1,6 +1,6 @@
 //! Defines the global S3 client.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use aws_config::from_env;
 use aws_sdk_s3::types::ByteStream;
 use aws_sdk_s3::Client;
@@ -22,7 +22,15 @@ pub async fn list_keys(
     if let Some(continuation_token) = next {
         operation = operation.continuation_token(continuation_token)
     }
-    let response = operation.send().await?;
+    let response = operation.send().await.with_context(|| {
+        format!(
+            "Failed to list keys under {:?} in bucket {:?} \
+             using {} continuation token",
+            prefix,
+            bucket,
+            if next.is_some() { "a" } else { "no" }
+        )
+    })?;
     Ok((
         response
             .contents()
@@ -41,24 +49,52 @@ pub async fn download(client: &Client, bucket: &str, key: &str, path: &Path) -> 
         .bucket(bucket)
         .key(key)
         .send()
-        .await?
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to download object {:?} from bucket {:?}",
+                key, bucket
+            )
+        })?
         .body
         .into_async_read();
-    let mut file = File::create(path).await?;
-    copy(&mut body, &mut file).await?;
+    let mut file = File::create(path).await.with_context(|| {
+        format!(
+            "Failed to create local file {:?} to hold remote object {:?} from bucket {:?}",
+            path, key, bucket
+        )
+    })?;
+    copy(&mut body, &mut file).await.with_context(|| {
+        format!(
+            "Failed to save the contents of remote object {:?} from bucket {:?} \
+             into local file {:?}",
+            key, bucket, path
+        )
+    })?;
     Ok(())
 }
 
 /// Uploads a single object to storage.
 pub async fn upload(client: &Client, bucket: &str, path: &Path, key: &str) -> Result<()> {
-    let body = ByteStream::from_path(path).await?;
+    let body = ByteStream::from_path(path).await.with_context(|| {
+        format!(
+            "Failed to load contents of local file {:?} for upload",
+            path
+        )
+    })?;
     client
         .put_object()
         .bucket(bucket)
         .key(key)
         .body(body)
         .send()
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to upload local file {:?} to remote object {:?} in bucket {:?}",
+                path, key, bucket
+            )
+        })?;
     Ok(())
 }
 
