@@ -10,6 +10,7 @@ use envy::from_env;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::cmp::max;
+use std::collections::VecDeque;
 use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::{info, instrument};
@@ -31,7 +32,7 @@ pub struct App {
     pub handler_command_program: String,
 
     /// The arguments passed to the executed handler program.
-    pub handler_command_args: Vec<String>,
+    pub handler_command_args: VecDeque<String>,
 }
 
 impl App {
@@ -75,15 +76,16 @@ impl App {
             pull_match_key_res.push(Regex::new("")?)
         }
         // Parse handler command
-        let mut handler_command_args =
+        let mut handler_command_args = VecDeque::from(
             shell_words::split(&settings.handler_command).with_context(|| {
                 format!(
                     "Failed to shell-split handler command {:?}",
                     &settings.handler_command
                 )
-            })?;
+            })?,
+        );
         let handler_command_program = handler_command_args
-            .pop()
+            .pop_front()
             .ok_or(anyhow::Error::msg("empty handler command"))?;
         // Done
         Ok(App {
