@@ -11,6 +11,7 @@ use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::{info, instrument};
@@ -224,19 +225,17 @@ impl App {
             "Uploading files with found differences"
         );
         for path in differences {
-            let storage_key = path
-                .strip_prefix(&base_path)
-                .with_context(|| {
+            let storage_key_path =
+                Path::new(&prefix).join(path.strip_prefix(&base_path).with_context(|| {
                     format!(
                         "Failed to convert local file path \
                          to bucket path for {:?} (using base path {:?})",
                         path, &base_path
                     )
-                })?
-                .to_str()
-                .ok_or_else(|| anyhow!("couldn't translate file path to object key: {:?}", path))?;
+                })?);
+            let storage_key = storage_key_path.to_string_lossy();
             info!(key = ?storage_key, "Uploading file");
-            upload(client, &target_bucket, &path, storage_key)
+            upload(client, &target_bucket, &path, &storage_key)
                 .await
                 .with_context(|| format!("Failed to upload file to {:?}", &storage_key))?;
         }
