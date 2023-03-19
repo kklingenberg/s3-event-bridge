@@ -7,7 +7,7 @@ use aws_sdk_s3::Client;
 use once_cell::sync::OnceCell;
 use std::env;
 use std::path::Path;
-use tokio::fs::File;
+use tokio::fs::{create_dir_all, File};
 use tokio::io::copy;
 
 /// Lists all keys found in a bucket under a given prefix. Returns a
@@ -44,6 +44,15 @@ pub async fn list_keys(
 
 /// Downloads a single object from storage into the specified path.
 pub async fn download(client: &Client, bucket: &str, key: &str, path: &Path) -> Result<()> {
+    // Ensure the directory structure exists
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent).await.with_context(|| {
+            format!(
+                "Failed to prepare local directory {:?} for object {:?}",
+                parent, key
+            )
+        })?;
+    }
     let mut body = client
         .get_object()
         .bucket(bucket)
