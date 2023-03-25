@@ -51,8 +51,49 @@ Configuration is achieved via the following environment variables:
 - `ROOT_FOLDER_VAR` is the name of the environment variable that will be
   populated for the handler program, containing the path to the temporary folder
   which contains the inputs and outputs. Defaults to `ROOT_FOLDER`.
+- `BUCKET_VAR` is the name of the environment variable that will be populated
+  for the handler program, containing the name of the bucket from which files
+  are being pulled to act as inputs. Defaults to `BUCKET`.
+- `KEY_PREFIX_VAR` is the name of the environment variable that will be
+  populated for the handler program, containing object key prefix used to select
+  input files to be pulled, to act as inputs. Defaults to `KEY_PREFIX`.
 
 ## Deployment
 
 This is mostly intended to be deployed as an entrypoint in a Docker image,
-alongside the dependencies and runtimes of the handler program.
+alongside the dependencies and runtimes of the handler program. For example, to
+run a hypothetical python script `handler.py` as a lambda function, you could
+write something like this:
+
+```dockerfile
+FROM python:3.11
+
+WORKDIR /app
+COPY handler.py ./
+
+# Install the event bridge
+RUN curl -L -o /usr/bin/bootstrap \
+    https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.2.0/bootstrap && \
+    chmod +x /usr/bin/bootstrap
+
+# Provide the instruction to be run for each event
+ENV HANDLER_COMMAND="python handler.py"
+
+ENTRYPOINT ["/usr/bin/bootstrap"]
+```
+
+In this example, it'll be up to the script `handler.py` to properly consider
+files using the environment variable `ROOT_FOLDER` as base. For example, if such
+a script expected a file named `inputs.json`, it would have to read it similarly
+to:
+
+```python
+import json
+import os
+from pathlib import Path
+
+base_path = Path(os.getenv("ROOT_FOLDER", "."))
+
+with open(base_path / "inputs.json") as f:
+    input_data = json.load(f)
+```

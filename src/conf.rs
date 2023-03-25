@@ -7,6 +7,16 @@ fn default_root_folder_var() -> String {
     String::from("ROOT_FOLDER")
 }
 
+/// Default `bucket_var` value.
+fn default_bucket_var() -> String {
+    String::from("BUCKET")
+}
+
+/// Default `key_prefix_var` value.
+fn default_key_prefix_var() -> String {
+    String::from("KEY_PREFIX")
+}
+
 /// The event bridge is configured to pull files from S3, execute a
 /// command, and push resulting files to S3. The configuration must be
 /// given as environment variables.
@@ -47,7 +57,18 @@ pub struct Settings {
     pub handler_command: String,
 
     /// The environment variable populated with the temporary folder
-    /// pulled from S3, to give the handler command.
+    /// pulled from S3, to be passed to the handler command.
     #[serde(default = "default_root_folder_var")]
     pub root_folder_var: String,
+
+    /// The environment variable populated with the bucket name from
+    /// which files are pulled, to be passed to the handler command.
+    #[serde(default = "default_bucket_var")]
+    pub bucket_var: String,
+
+    /// The environment variable populated with the object key prefix
+    /// used to pull files from S3, to be passed to the handler
+    /// command.
+    #[serde(default = "default_key_prefix_var")]
+    pub key_prefix_var: String,
 }

@@ -1,6 +1,6 @@
 [package]
 name = "s3-event-bridge"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -20,4 +20,3 @@ tempfile = "3.4.0"
 tokio = { version = "1", features = ["macros", "process", "rt", "fs", "io-util"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
-

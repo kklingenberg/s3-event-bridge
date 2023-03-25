@@ -44,6 +44,12 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(Base64::encode_string(&hash))
 }
 
+/// Produces an empty snapshot, guaranteed to be different to anything
+/// except another empty snapshot.
+pub fn empty_signatures() -> Result<BTreeMap<PathBuf, String>> {
+    Ok(BTreeMap::new())
+}
+
 /// Produces a snapshot of the given folder.
 pub fn compute_signatures(path: &Path) -> Result<BTreeMap<PathBuf, String>> {
     let mut signatures = BTreeMap::new();

@@ -10,13 +10,17 @@ use lambda_runtime::{run, service_fn, LambdaEvent};
 
 /// Handle each S3 event record through the handler program
 async fn function_handler(event: LambdaEvent<SqsEventObj<S3Event>>) -> Result<()> {
-    for s3_event in event.payload.records {
-        for record in s3_event.body.records {
-            app::current()
-                .handle(&record, client::current())
-                .await
-                .with_context(|| format!("Failed to handle record {:?}", &record))?;
-        }
+    for batch in app::current().batch_events(
+        event
+            .payload
+            .records
+            .into_iter()
+            .flat_map(|record| record.body.records),
+    ) {
+        app::current()
+            .handle(&batch, client::current())
+            .await
+            .with_context(|| format!("Failed to handle batch of records {:?}", &batch))?;
     }
     Ok(())
 }

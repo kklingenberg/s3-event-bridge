@@ -3,18 +3,27 @@
 
 use crate::client::{download, list_keys, upload};
 use crate::conf::Settings;
-use crate::sign::{compute_signatures, find_signature_differences};
+use crate::sign::{compute_signatures, empty_signatures, find_signature_differences};
 use anyhow::{anyhow, Context, Result};
 use aws_lambda_events::s3::S3EventRecord;
 use envy::from_env;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::cmp::max;
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::{info, instrument};
+
+/// A batch of S3 events that share a key prefix and represent objects
+/// that belong to the same bucket.
+#[derive(Debug)]
+pub struct EventBatch {
+    pub bucket: String,
+    pub prefix: String,
+}
 
 /// An App is an initialized application state, derived from
 /// settings. This is only useful to pre-compute stuff that will be
@@ -98,70 +107,92 @@ impl App {
         })
     }
 
-    /// Handle an S3 event record.
+    /// Group events according to common bucket and key prefixes.
+    pub fn batch_events<I>(&self, records: I) -> Vec<EventBatch>
+    where
+        I: Iterator<Item = S3EventRecord>,
+    {
+        let mut batches = BTreeSet::new();
+        for record in records {
+            let processed = (|| {
+                let key = record
+                    .s3
+                    .object
+                    .key
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("S3 event record is missing an object key"))?;
+                if !self.match_key_re.is_match(key) {
+                    return Err(anyhow!(
+                        "S3 event record has object key {:?} \
+                         that doesn't match configured pattern {:?}; ignoring",
+                        key,
+                        self.settings.match_key
+                    ));
+                }
+                let bucket = record
+                    .s3
+                    .bucket
+                    .name
+                    .clone()
+                    .ok_or_else(|| anyhow!("S3 event record is missing a bucket name"))?;
+                let prefix = if self.settings.pull_parent_dirs < 0 {
+                    String::from("")
+                } else {
+                    let mut prefix_parts = key
+                        .split('/')
+                        .rev()
+                        .skip((self.settings.pull_parent_dirs + 1).try_into()?)
+                        .collect::<Vec<&str>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<Vec<&str>>()
+                        .join("/");
+                    if !prefix_parts.is_empty() {
+                        prefix_parts.push('/');
+                    }
+                    prefix_parts
+                };
+                Ok((bucket, prefix))
+            })();
+            if let Ok((bucket, prefix)) = processed {
+                batches.insert((bucket, prefix));
+            } else {
+                info!("Skipped event record {:?}", processed);
+            }
+        }
+
+        batches
+            .into_iter()
+            .map(|(bucket, prefix)| EventBatch { bucket, prefix })
+            .collect()
+    }
+
+    /// Handle a batch of S3 event records.
     #[instrument(skip(self, client))]
-    pub async fn handle(&self, record: &S3EventRecord, client: &aws_sdk_s3::Client) -> Result<()> {
+    pub async fn handle(&self, batch: &EventBatch, client: &aws_sdk_s3::Client) -> Result<()> {
         let base_dir = TempDir::new().context("Failed to create temporary directory")?;
         let base_path = base_dir.into_path();
         info!(
             path = ?base_path,
             "Created temporary directory to hold input and output files"
         );
-
-        let key = record
-            .s3
-            .object
-            .key
-            .as_ref()
-            .ok_or_else(|| anyhow!("S3 event record is missing an object key"))?;
-        if !self.match_key_re.is_match(key) {
-            info!(
-                key,
-                pattern = self.settings.match_key,
-                "S3 event record has object key that doesn't match configured pattern; ignoring"
-            );
-            return Ok(());
-        }
-        let bucket = record
-            .s3
-            .bucket
-            .name
-            .as_ref()
-            .ok_or_else(|| anyhow!("S3 event record is missing a bucket name"))?;
         let target_bucket = self
             .settings
             .target_bucket
             .clone()
-            .unwrap_or_else(|| bucket.clone());
-        let prefix = if self.settings.pull_parent_dirs < 0 {
-            String::from("")
-        } else {
-            let mut prefix_parts = key
-                .split('/')
-                .rev()
-                .skip((self.settings.pull_parent_dirs + 1).try_into()?)
-                .collect::<Vec<&str>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<&str>>()
-                .join("/");
-            if !prefix_parts.is_empty() {
-                prefix_parts.push('/');
-            }
-            prefix_parts
-        };
+            .unwrap_or_else(|| batch.bucket.clone());
 
         // First: pull all relevant files from S3, and compute a
         // signature for each file pulled
         info!("Downloading input files");
         let mut next = None;
         loop {
-            let (page, next_token) = list_keys(client, bucket, &prefix, &next)
+            let (page, next_token) = list_keys(client, &batch.bucket, &batch.prefix, &next)
                 .await
                 .with_context(|| {
                     format!(
                         "Failed to list keys under {:?} in bucket {:?}",
-                        &prefix, bucket
+                        &batch.prefix, &batch.bucket
                     )
                 })?;
             for page_key in page {
@@ -170,14 +201,14 @@ impl App {
                     .iter()
                     .any(|re| re.is_match(&page_key))
                 {
-                    let filename = page_key.strip_prefix(&prefix).unwrap_or(&page_key);
+                    let filename = page_key.strip_prefix(&batch.prefix).unwrap_or(&page_key);
                     let local_path = base_path.join(filename);
-                    download(client, bucket, &page_key, &local_path)
+                    download(client, &batch.bucket, &page_key, &local_path)
                         .await
                         .with_context(|| {
                             format!(
                                 "Failed to download object {:?} from bucket {:?}",
-                                &page_key, bucket
+                                &page_key, &batch.bucket
                             )
                         })?;
                 }
@@ -188,8 +219,12 @@ impl App {
                 next = next_token;
             }
         }
-        let signatures = compute_signatures(&base_path)
-            .with_context(|| format!("Failed to compute signatures in {:?}", &base_path))?;
+        let signatures = if target_bucket == batch.bucket {
+            compute_signatures(&base_path)
+                .with_context(|| format!("Failed to compute signatures in {:?}", &base_path))
+        } else {
+            empty_signatures()
+        }?;
 
         // Second: invoke the handler program
         info!(
@@ -199,6 +234,8 @@ impl App {
         let status = Command::new(&self.handler_command_program)
             .args(&self.handler_command_args)
             .env(&self.settings.root_folder_var, &base_path)
+            .env(&self.settings.bucket_var, &batch.bucket)
+            .env(&self.settings.key_prefix_var, &batch.prefix)
             .status()
             .await
             .with_context(|| {
@@ -225,14 +262,15 @@ impl App {
             "Uploading files with found differences"
         );
         for path in differences {
-            let storage_key_path =
-                Path::new(&prefix).join(path.strip_prefix(&base_path).with_context(|| {
+            let storage_key_path = Path::new(&batch.prefix).join(
+                path.strip_prefix(&base_path).with_context(|| {
                     format!(
                         "Failed to convert local file path \
                          to bucket path for {:?} (using base path {:?})",
                         path, &base_path
                     )
-                })?);
+                })?,
+            );
             let storage_key = storage_key_path.to_string_lossy();
             info!(key = ?storage_key, "Uploading file");
             upload(client, &target_bucket, &path, &storage_key)
