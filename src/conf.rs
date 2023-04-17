@@ -48,6 +48,18 @@ pub struct Settings {
     #[serde(default)]
     pub pull_match_keys: Vec<String>,
 
+    /// Defines a jq expression to run against the set of objects to
+    /// be pulled which, if defined and returning `false`, will skip
+    /// execution.
+    #[serde(default)]
+    pub execution_filter_expr: Option<String>,
+
+    /// Defines a file containing a jq expression to run against the
+    /// set of objects to be pulled which, if defined and returning
+    /// `false`, will skip execution.
+    #[serde(default)]
+    pub execution_filter_file: Option<String>,
+
     /// Defines a bucket to receive the outputs. If omitted, it will
     /// be the same bucket as the one in the triggering event.
     #[serde(default)]
