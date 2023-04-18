@@ -6,9 +6,13 @@ use crate::conf::Settings;
 use crate::sign::{compute_signatures, empty_signatures, find_signature_differences};
 use anyhow::{anyhow, Context, Result};
 use aws_lambda_events::s3::S3EventRecord;
+use aws_sdk_s3::types::{Object, Owner};
+use aws_smithy_types_convert::date_time::DateTimeExt;
+use chrono::{DateTime, Utc};
 use envy::from_env;
 use once_cell::sync::OnceCell;
 use regex::Regex;
+use serde::Serialize;
 use std::cmp::max;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -96,8 +100,8 @@ impl App {
             &settings.execution_filter_file.clone().unwrap_or_default(),
         ) {
             (expr, filepath) if filepath.is_empty() => {
-                jq_rs::compile(expr).map_err(|_| {
-                    anyhow::Error::msg("Failed to compile execution filter expression")
+                jq_rs::compile(expr).map_err(|e| {
+                    anyhow!("Failed to compile execution filter expression: {:?}", e)
                 })?;
                 Ok(Some(expr.clone()))
             }
@@ -105,13 +109,16 @@ impl App {
                 let file_expr = fs::read_to_string(filepath).with_context(|| {
                     format!("Failed to read execution filter file: {:?}", filepath)
                 })?;
-                jq_rs::compile(&file_expr).map_err(|_| {
-                    anyhow::Error::msg("Failed to compile execution filter expression within file")
+                jq_rs::compile(&file_expr).map_err(|e| {
+                    anyhow!(
+                        "Failed to compile execution filter expression within file: {:?}",
+                        e
+                    )
                 })?;
                 Ok(Some(file_expr))
             }
             (expr, filepath) if expr.is_empty() && filepath.is_empty() => Ok(None),
-            _ => Err(anyhow::Error::msg(
+            _ => Err(anyhow!(
                 "Can't use both an execution filter expression and a file at the same time",
             )),
         }?;
@@ -126,7 +133,7 @@ impl App {
         );
         let handler_command_program = handler_command_args
             .pop_front()
-            .ok_or(anyhow::Error::msg("empty handler command"))?;
+            .ok_or(anyhow!("empty handler command"))?;
         // Done
         Ok(App {
             settings,
@@ -249,9 +256,21 @@ impl App {
         }
 
         // Second: run the filter expression on all to-be-pulled objects
-        if let Some(_execution_filter_expr) = &self.execution_filter_expr {
+        if let Some(execution_filter_expr) = &self.execution_filter_expr {
             info!("Evaluating execution filter");
-            info!("TODO: execution filter");
+            let execution_filter_result = serialize_objects(&pending_objects)
+                .context("Failed to serialize objects for execution filter")
+                .and_then(|input| {
+                    jq_rs::run(execution_filter_expr, &input)
+                        .map_err(|e| anyhow!("Execution filter failed during evaluation: {:?}", e))
+                })?;
+            if execution_filter_result == "false\n" {
+                info!(
+                    "Execution filter returned 'false'; stopping before download of {:?} files",
+                    pending_objects.len()
+                );
+                return Ok(());
+            }
         }
 
         // Third: pull all relevant files
@@ -367,4 +386,78 @@ pub fn init() -> Result<()> {
 /// initialized.
 pub fn current() -> &'static App {
     CURRENT.get().expect("app is not initialized")
+}
+
+/// Define a serde serializable version of AWS SDK object owner.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct SerializableOwner<'fields> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<&'fields str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i_d: Option<&'fields str>,
+}
+
+impl<'fields> SerializableOwner<'fields> {
+    /// Instantiate a serializable object owner from an AWS SDK object owner.
+    pub fn from_owner(owner: &'fields Owner) -> Self {
+        Self {
+            display_name: owner.display_name(),
+            i_d: owner.id(),
+        }
+    }
+}
+
+/// Define a serde serializable version of AWS SDK object.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct SerializableObject<'fields> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checksum_algorithm: Option<Vec<&'fields str>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e_tag: Option<&'fields str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<&'fields str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_modified: Option<DateTime<Utc>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<SerializableOwner<'fields>>,
+
+    size: i64,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_class: Option<&'fields str>,
+}
+
+impl<'fields> SerializableObject<'fields> {
+    /// Instantiate a serializable object from an AWS SDK object.
+    pub fn from_object(object: &'fields Object) -> Self {
+        Self {
+            checksum_algorithm: object
+                .checksum_algorithm()
+                .map(|algorithm| algorithm.iter().map(|a| a.as_str()).collect()),
+            e_tag: object.e_tag(),
+            key: object.key(),
+            last_modified: object.last_modified().and_then(|d| d.to_chrono_utc().ok()),
+            owner: object.owner().map(SerializableOwner::from_owner),
+            size: object.size(),
+            storage_class: object.storage_class().map(|s| s.as_str()),
+        }
+    }
+}
+
+/// Serializes a vector of S3 objects as an input to the execution
+/// filter. Reference:
+/// https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html
+fn serialize_objects(objects: &[Object]) -> Result<String> {
+    let converted = objects
+        .iter()
+        .map(SerializableObject::from_object)
+        .collect::<Vec<SerializableObject>>();
+    serde_json::to_string(&converted).context("Failed serialization of S3 objects")
 }

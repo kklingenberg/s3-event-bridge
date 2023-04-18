@@ -103,7 +103,7 @@ group_by(.Key | split("/") | .[:-1]) | all(
 
 This of course doesn't consider any other properties of the objects, which might
 serve to catch weird error cases in which a reduce phase would not be
-wanted. For example, if the `outputs.txt` file is 0 bytes in size, you might
+wanted. For example, if the `output.txt` file is 0 bytes in size, you might
 consider that an error (discernible through the `Size` property).
 
 In case no automatic coordination phase of a data processing pipeline is needed,
@@ -124,7 +124,7 @@ COPY handler.py ./
 
 # Install the event bridge
 RUN curl -L -o /usr/bin/bootstrap \
-    https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.2.0/bootstrap && \
+    https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.0/bootstrap && \
     chmod +x /usr/bin/bootstrap
 
 # Provide the instruction to be run for each event
@@ -135,18 +135,27 @@ ENTRYPOINT ["/usr/bin/bootstrap"]
 
 In this example, it'll be up to the script `handler.py` to properly consider
 files using the environment variable `ROOT_FOLDER` as base. For example, if such
-a script expected a file named `inputs.json`, it would have to read it similarly
+a script expected a file named `input.txt`, it would have to read it similarly
 to:
 
 ```python
-import json
 import os
 from pathlib import Path
 
 base_path = Path(os.getenv("ROOT_FOLDER", "."))
 
-with open(base_path / "inputs.json") as f:
-    input_data = json.load(f)
+with open(base_path / "input.txt") as f:
+    input_data = f.read()
+
+def process(data):
+    result = ""
+    # ...
+    return result
+
+output_data = process(input_data)
+
+with open(base_path / "output.txt", "w") as f:
+    f.write(output_data)
 ```
 
 Also, and for the time being, the integration mechanism is limited to an SQS
