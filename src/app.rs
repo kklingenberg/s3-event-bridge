@@ -60,10 +60,7 @@ impl App {
     pub fn new(settings: Settings) -> Result<Self> {
         // Parse regexes
         let match_key_re = if let Some(match_key) = &settings.match_key {
-            Regex::new(&format!(
-                "^{}$",
-                match_key.split('*').collect::<Vec<&str>>().join("[^/]*?")
-            ))
+            Regex::new(match_key)
         } else {
             Regex::new("")
         }
@@ -75,21 +72,12 @@ impl App {
         })?;
         let mut pull_match_key_res = Vec::with_capacity(max(settings.pull_match_keys.len(), 1));
         for pull_match_key in &settings.pull_match_keys {
-            pull_match_key_res.push(
-                Regex::new(&format!(
-                    "^{}$",
-                    pull_match_key
-                        .split('*')
-                        .collect::<Vec<&str>>()
-                        .join("[^/]*?")
-                ))
-                .with_context(|| {
-                    format!(
-                        "Failed to build a pull key matching regex from {:?}",
-                        &pull_match_key
-                    )
-                })?,
-            );
+            pull_match_key_res.push(Regex::new(pull_match_key).with_context(|| {
+                format!(
+                    "Failed to build a pull key matching regex from {:?}",
+                    &pull_match_key
+                )
+            })?);
         }
         if pull_match_key_res.is_empty() {
             pull_match_key_res.push(Regex::new("")?)
@@ -237,17 +225,7 @@ impl App {
                         &batch.prefix, &batch.bucket
                     )
                 })?;
-            for obj in page {
-                if self.pull_match_key_res.iter().any(|re| {
-                    if let Some(k) = obj.key() {
-                        re.is_match(k)
-                    } else {
-                        false
-                    }
-                }) {
-                    pending_objects.push(obj);
-                }
-            }
+            pending_objects.extend(page);
             if next_token.is_none() {
                 break;
             } else {
@@ -255,7 +233,7 @@ impl App {
             }
         }
 
-        // Second: run the filter expression on all to-be-pulled objects
+        // Second: run the filter expression on all candidate objects
         if let Some(execution_filter_expr) = &self.execution_filter_expr {
             info!("Evaluating execution filter");
             let execution_filter_result = serialize_objects(&pending_objects)
@@ -276,7 +254,15 @@ impl App {
         // Third: pull all relevant files
         info!("Downloading input objects");
         let mut joinset: JoinSet<Result<String>> = JoinSet::new();
-        for obj in pending_objects {
+        for obj in pending_objects.into_iter().filter(|obj| {
+            self.pull_match_key_res.iter().any(|re| {
+                if let Some(k) = obj.key() {
+                    re.is_match(k)
+                } else {
+                    false
+                }
+            })
+        }) {
             let bucket = batch.bucket.clone();
             let obj_key = obj.key().unwrap_or_default().to_string();
             let filename = obj_key.strip_prefix(&batch.prefix).unwrap_or(&obj_key);

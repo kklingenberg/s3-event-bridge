@@ -14,5 +14,6 @@ fi
 
 exec env \
      JQ_LIB_STATIC=1 \
+     ONIG_LIB_STATIC=1 \
      JQ_LIB_DIR="${CWD}/build-libs/libjq/lib" \
      cargo "$@"
