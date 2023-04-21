@@ -2,7 +2,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use aws_config::from_env;
-use aws_sdk_s3::types::ByteStream;
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::types::Object;
 use aws_sdk_s3::Client;
 use once_cell::sync::OnceCell;
 use std::env;
@@ -17,7 +18,7 @@ pub async fn list_keys(
     bucket: &str,
     prefix: &str,
     next: &Option<String>,
-) -> Result<(Vec<String>, Option<String>)> {
+) -> Result<(Vec<Object>, Option<String>)> {
     let mut operation = client.list_objects_v2().bucket(bucket).prefix(prefix);
     if let Some(continuation_token) = next {
         operation = operation.continuation_token(continuation_token)
@@ -32,12 +33,7 @@ pub async fn list_keys(
         )
     })?;
     Ok((
-        response
-            .contents()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|o| o.key().map(String::from))
-            .collect(),
+        response.contents().unwrap_or_default().to_vec(),
         response.next_continuation_token().map(String::from),
     ))
 }

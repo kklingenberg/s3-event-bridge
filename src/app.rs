@@ -6,15 +6,21 @@ use crate::conf::Settings;
 use crate::sign::{compute_signatures, empty_signatures, find_signature_differences};
 use anyhow::{anyhow, Context, Result};
 use aws_lambda_events::s3::S3EventRecord;
+use aws_sdk_s3::types::{Object, Owner};
+use aws_smithy_types_convert::date_time::DateTimeExt;
+use chrono::{DateTime, Utc};
 use envy::from_env;
 use once_cell::sync::OnceCell;
 use regex::Regex;
+use serde::Serialize;
 use std::cmp::max;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
+use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::process::Command;
+use tokio::task::JoinSet;
 use tracing::{info, instrument};
 
 /// A batch of S3 events that share a key prefix and represent objects
@@ -38,6 +44,9 @@ pub struct App {
     /// The regexes that match files to be pulled.
     pub pull_match_key_res: Vec<Regex>,
 
+    /// The execution filter expression to use on pulled objects.
+    pub execution_filter_expr: Option<String>,
+
     /// The program that needs to be executed as the handler.
     pub handler_command_program: String,
 
@@ -51,10 +60,7 @@ impl App {
     pub fn new(settings: Settings) -> Result<Self> {
         // Parse regexes
         let match_key_re = if let Some(match_key) = &settings.match_key {
-            Regex::new(&format!(
-                "^{}$",
-                match_key.split('*').collect::<Vec<&str>>().join("[^/]*?")
-            ))
+            Regex::new(match_key)
         } else {
             Regex::new("")
         }
@@ -66,25 +72,44 @@ impl App {
         })?;
         let mut pull_match_key_res = Vec::with_capacity(max(settings.pull_match_keys.len(), 1));
         for pull_match_key in &settings.pull_match_keys {
-            pull_match_key_res.push(
-                Regex::new(&format!(
-                    "^{}$",
-                    pull_match_key
-                        .split('*')
-                        .collect::<Vec<&str>>()
-                        .join("[^/]*?")
-                ))
-                .with_context(|| {
-                    format!(
-                        "Failed to build a pull key matching regex from {:?}",
-                        &pull_match_key
-                    )
-                })?,
-            );
+            pull_match_key_res.push(Regex::new(pull_match_key).with_context(|| {
+                format!(
+                    "Failed to build a pull key matching regex from {:?}",
+                    &pull_match_key
+                )
+            })?);
         }
         if pull_match_key_res.is_empty() {
             pull_match_key_res.push(Regex::new("")?)
         }
+        // Compile execution filter, to catch syntax errors early
+        let execution_filter_expr = match (
+            &settings.execution_filter_expr.clone().unwrap_or_default(),
+            &settings.execution_filter_file.clone().unwrap_or_default(),
+        ) {
+            (expr, filepath) if filepath.is_empty() => {
+                jq_rs::compile(expr).map_err(|e| {
+                    anyhow!("Failed to compile execution filter expression: {:?}", e)
+                })?;
+                Ok(Some(expr.clone()))
+            }
+            (expr, filepath) if expr.is_empty() => {
+                let file_expr = fs::read_to_string(filepath).with_context(|| {
+                    format!("Failed to read execution filter file: {:?}", filepath)
+                })?;
+                jq_rs::compile(&file_expr).map_err(|e| {
+                    anyhow!(
+                        "Failed to compile execution filter expression within file: {:?}",
+                        e
+                    )
+                })?;
+                Ok(Some(file_expr))
+            }
+            (expr, filepath) if expr.is_empty() && filepath.is_empty() => Ok(None),
+            _ => Err(anyhow!(
+                "Can't use both an execution filter expression and a file at the same time",
+            )),
+        }?;
         // Parse handler command
         let mut handler_command_args = VecDeque::from(
             shell_words::split(&settings.handler_command).with_context(|| {
@@ -96,12 +121,13 @@ impl App {
         );
         let handler_command_program = handler_command_args
             .pop_front()
-            .ok_or(anyhow::Error::msg("empty handler command"))?;
+            .ok_or(anyhow!("empty handler command"))?;
         // Done
         Ok(App {
             settings,
             match_key_re,
             pull_match_key_res,
+            execution_filter_expr,
             handler_command_program,
             handler_command_args,
         })
@@ -169,7 +195,11 @@ impl App {
 
     /// Handle a batch of S3 event records.
     #[instrument(skip(self, client))]
-    pub async fn handle(&self, batch: &EventBatch, client: &aws_sdk_s3::Client) -> Result<()> {
+    pub async fn handle(
+        &self,
+        batch: &EventBatch,
+        client: &'static aws_sdk_s3::Client,
+    ) -> Result<()> {
         let base_dir = TempDir::new().context("Failed to create temporary directory")?;
         let base_path = base_dir.into_path();
         info!(
@@ -182,10 +212,10 @@ impl App {
             .clone()
             .unwrap_or_else(|| batch.bucket.clone());
 
-        // First: pull all relevant files from S3, and compute a
-        // signature for each file pulled
-        info!("Downloading input files");
+        // First: list all relevant objects from S3
+        info!("Listing input objects");
         let mut next = None;
+        let mut pending_objects = Vec::new();
         loop {
             let (page, next_token) = list_keys(client, &batch.bucket, &batch.prefix, &next)
                 .await
@@ -195,30 +225,65 @@ impl App {
                         &batch.prefix, &batch.bucket
                     )
                 })?;
-            for page_key in page {
-                if self
-                    .pull_match_key_res
-                    .iter()
-                    .any(|re| re.is_match(&page_key))
-                {
-                    let filename = page_key.strip_prefix(&batch.prefix).unwrap_or(&page_key);
-                    let local_path = base_path.join(filename);
-                    download(client, &batch.bucket, &page_key, &local_path)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to download object {:?} from bucket {:?}",
-                                &page_key, &batch.bucket
-                            )
-                        })?;
-                }
-            }
+            pending_objects.extend(page);
             if next_token.is_none() {
                 break;
             } else {
                 next = next_token;
             }
         }
+
+        // Second: run the filter expression on all candidate objects
+        if let Some(execution_filter_expr) = &self.execution_filter_expr {
+            info!("Evaluating execution filter");
+            let execution_filter_result = serialize_objects(&pending_objects)
+                .context("Failed to serialize objects for execution filter")
+                .and_then(|input| {
+                    jq_rs::run(execution_filter_expr, &input)
+                        .map_err(|e| anyhow!("Execution filter failed during evaluation: {:?}", e))
+                })?;
+            if execution_filter_result == "false\n" {
+                info!(
+                    "Execution filter returned 'false'; stopping before download of {:?} files",
+                    pending_objects.len()
+                );
+                return Ok(());
+            }
+        }
+
+        // Third: pull all relevant files
+        info!("Downloading input objects");
+        let mut joinset: JoinSet<Result<String>> = JoinSet::new();
+        for obj in pending_objects.into_iter().filter(|obj| {
+            self.pull_match_key_res.iter().any(|re| {
+                if let Some(k) = obj.key() {
+                    re.is_match(k)
+                } else {
+                    false
+                }
+            })
+        }) {
+            let bucket = batch.bucket.clone();
+            let obj_key = obj.key().unwrap_or_default().to_string();
+            let filename = obj_key.strip_prefix(&batch.prefix).unwrap_or(&obj_key);
+            let local_path = base_path.join(filename);
+            joinset.spawn(async move {
+                download(client, &bucket, &obj_key, &local_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to download object {:?} from bucket {:?}",
+                            &obj_key, &bucket
+                        )
+                    })?;
+                Ok(obj_key)
+            });
+        }
+        while let Some(downloaded_obj_key) = joinset.join_next().await {
+            info!("Downloaded {:?}", downloaded_obj_key??);
+        }
+
+        // Fourth: compute a signature for each file pulled
         let signatures = if target_bucket == batch.bucket {
             compute_signatures(&base_path)
                 .with_context(|| format!("Failed to compute signatures in {:?}", &base_path))
@@ -226,7 +291,7 @@ impl App {
             empty_signatures()
         }?;
 
-        // Second: invoke the handler program
+        // Fifth: invoke the handler program
         info!(
             command = self.settings.handler_command,
             "Invoking handler command"
@@ -249,7 +314,7 @@ impl App {
             return Ok(());
         }
 
-        // Third: upload the changed files
+        // Sixth: upload the changed files
         let differences =
             find_signature_differences(&base_path, &signatures).with_context(|| {
                 format!(
@@ -261,7 +326,9 @@ impl App {
             total = differences.len(),
             "Uploading files with found differences"
         );
+        let mut joinset: JoinSet<Result<String>> = JoinSet::new();
         for path in differences {
+            let bucket = target_bucket.clone();
             let storage_key_path = Path::new(&batch.prefix).join(
                 path.strip_prefix(&base_path).with_context(|| {
                     format!(
@@ -271,11 +338,17 @@ impl App {
                     )
                 })?,
             );
-            let storage_key = storage_key_path.to_string_lossy();
-            info!(key = ?storage_key, "Uploading file");
-            upload(client, &target_bucket, &path, &storage_key)
-                .await
-                .with_context(|| format!("Failed to upload file to {:?}", &storage_key))?;
+            let storage_key = storage_key_path.to_string_lossy().to_string();
+            joinset.spawn(async move {
+                info!(key = ?storage_key, "Uploading file");
+                upload(client, &bucket, &path, &storage_key)
+                    .await
+                    .with_context(|| format!("Failed to upload file to {:?}", &storage_key))?;
+                Ok(storage_key)
+            });
+        }
+        while let Some(uploaded_obj_key) = joinset.join_next().await {
+            info!("Uploaded {:?}", uploaded_obj_key??);
         }
 
         // Done
@@ -299,4 +372,78 @@ pub fn init() -> Result<()> {
 /// initialized.
 pub fn current() -> &'static App {
     CURRENT.get().expect("app is not initialized")
+}
+
+/// Define a serde serializable version of AWS SDK object owner.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct SerializableOwner<'fields> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<&'fields str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i_d: Option<&'fields str>,
+}
+
+impl<'fields> SerializableOwner<'fields> {
+    /// Instantiate a serializable object owner from an AWS SDK object owner.
+    pub fn from_owner(owner: &'fields Owner) -> Self {
+        Self {
+            display_name: owner.display_name(),
+            i_d: owner.id(),
+        }
+    }
+}
+
+/// Define a serde serializable version of AWS SDK object.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct SerializableObject<'fields> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checksum_algorithm: Option<Vec<&'fields str>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e_tag: Option<&'fields str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<&'fields str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_modified: Option<DateTime<Utc>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<SerializableOwner<'fields>>,
+
+    size: i64,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_class: Option<&'fields str>,
+}
+
+impl<'fields> SerializableObject<'fields> {
+    /// Instantiate a serializable object from an AWS SDK object.
+    pub fn from_object(object: &'fields Object) -> Self {
+        Self {
+            checksum_algorithm: object
+                .checksum_algorithm()
+                .map(|algorithm| algorithm.iter().map(|a| a.as_str()).collect()),
+            e_tag: object.e_tag(),
+            key: object.key(),
+            last_modified: object.last_modified().and_then(|d| d.to_chrono_utc().ok()),
+            owner: object.owner().map(SerializableOwner::from_owner),
+            size: object.size(),
+            storage_class: object.storage_class().map(|s| s.as_str()),
+        }
+    }
+}
+
+/// Serializes a vector of S3 objects as an input to the execution
+/// filter. Reference:
+/// https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html
+fn serialize_objects(objects: &[Object]) -> Result<String> {
+    let converted = objects
+        .iter()
+        .map(SerializableObject::from_object)
+        .collect::<Vec<SerializableObject>>();
+    serde_json::to_string(&converted).context("Failed serialization of S3 objects")
 }
