@@ -164,3 +164,74 @@ Also, and for the time being, the integration mechanism is limited to an SQS
 queue triggering a Lambda function, with said queue only being fed events from
 S3 buckets. This may change in the future, possibly to consider other kinds of
 integrations with S3 (e.g. direct invocation, SNS publish/subscribe, etc.).
+
+## Usage as glue for other AWS services
+
+> :warning: This isn't the intended use case for this utility, as the resulting
+> docker image will be bloated and cause unnecessary costs. I recommend to just
+> implement the AWS API calls using a
+> [runtime](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html)
+> and the corresponding [AWS SDK](https://aws.amazon.com/developer/tools/).
+
+A common (and in fashion, given all the craze about training ML models)
+integration you would want is between S3 events and AWS Batch jobs. You could
+achieve it using this utility run in an AWS Lambda that acts like the bridge
+between both services, by installing [AWSCLI](https://aws.amazon.com/cli/) in
+the docker image:
+
+```dockerfile
+FROM debian:stable-slim
+
+RUN set -ex ; \
+    apt-get update ; \
+    apt-get install -y groff less curl unzip ; \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ; \
+    unzip awscliv2.zip ; \
+    ./aws/install ; \
+    rm -r awscliv2.zip ./aws ; \
+    curl -L -o /usr/bin/bootstrap \
+         https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.0/bootstrap ; \
+    chmod +x /usr/bin/bootstrap ; \
+    apt-get purge -y curl unzip ; \
+    apt-get autoremove -y ; \
+    apt-get clean ; \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY command.sh ./
+
+ENV HANDLER_COMMAND="bash command.sh"
+# Don't pull any file from S3, since they're not needed
+ENV PULL_MATCH_KEYS="^$"
+
+ENTRYPOINT ["/usr/bin/bootstrap"]
+```
+
+And a script file `command.sh` like this:
+
+```bash
+set -ex
+
+cat > "${ROOT_FOLDER}/batch_job_container_overrides.json" <<EOF
+{
+  "environment": [
+    {
+      "name": "BUCKET",
+      "value": "${BUCKET}"
+    },
+    {
+      "name": "KEY_PREFIX",
+      "value": "${KEY_PREFIX}"
+    }
+  ]
+}
+EOF
+
+aws batch submit-job \
+    --job-name <some-job-name> \
+    --job-queue <some-job-queue> \
+    --job-definition <some-job-definition> \
+    --container-overrides "file://${ROOT_FOLDER}/batch_job_container_overrides.json" \
+    --output json \
+    > "${ROOT_FOLDER}/batch_job.json"
+```
