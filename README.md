@@ -126,7 +126,7 @@ COPY handler.py ./
 
 # Install the event bridge
 RUN curl -L -o /usr/bin/bootstrap \
-    https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.0/bootstrap && \
+    https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.1/bootstrap && \
     chmod +x /usr/bin/bootstrap
 
 # Provide the instruction to be run for each event
@@ -190,7 +190,7 @@ RUN set -ex ; \
     ./aws/install ; \
     rm -r awscliv2.zip ./aws ; \
     curl -L -o /usr/bin/bootstrap \
-         https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.0/bootstrap ; \
+         https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.1/bootstrap ; \
     chmod +x /usr/bin/bootstrap ; \
     apt-get purge -y curl unzip ; \
     apt-get autoremove -y ; \
