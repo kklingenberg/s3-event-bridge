@@ -1,7 +1,13 @@
 [package]
 name = "s3-event-bridge"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
 
 [dependencies]
 anyhow = "1.0.69"
@@ -19,7 +25,6 @@ regex = "1.7.1"
 serde = { version = "1.0.154", features = ["derive"] }
 serde_json = "1.0.96"
 sha1 = "0.10.5"
-shell-words = "1.1.0"
 tempfile = "3.4.0"
 tokio = { version = "1", features = ["macros", "process", "rt", "fs", "io-util"] }
 tracing = { version = "0.1", features = ["log"] }

@@ -61,8 +61,6 @@ Configuration is achieved via the following environment variables:
   they default to the equivalent of a constant `true` jq expression.
 - `TARGET_BUCKET` is the bucket name that will receive outputs. If omitted, it
   will default to the same bucket as the one specified in the original event.
-- `HANDLER_COMMAND` is the shell expression that starts the command that handles
-  files and does the actual work.
 - `ROOT_FOLDER_VAR` is the name of the environment variable that will be
   populated for the handler program, containing the path to the temporary folder
   which contains the inputs and outputs. Defaults to `ROOT_FOLDER`.
@@ -72,6 +70,11 @@ Configuration is achieved via the following environment variables:
 - `KEY_PREFIX_VAR` is the name of the environment variable that will be
   populated for the handler program, containing object key prefix used to select
   input files to be pulled, to act as inputs. Defaults to `KEY_PREFIX`.
+
+Apart from the configuration variables, the AWS Lambda bootstrap binary needs to
+receive the handler command expression as its argument (e.g. if the bootstrap
+binary is place in the current directory, `./lambda-bootstrap ls` would execute
+`ls` as the handler).
 
 ### A small note on map-reduce
 
@@ -125,14 +128,14 @@ WORKDIR /app
 COPY handler.py ./
 
 # Install the event bridge
-RUN curl -L -o /usr/bin/bootstrap \
-    https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.1/bootstrap && \
+RUN set -ex ; \
+    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.0/lambda-bootstrap \
+         -L -o /usr/bin/bootstrap ; \
     chmod +x /usr/bin/bootstrap
 
-# Provide the instruction to be run for each event
-ENV HANDLER_COMMAND="python handler.py"
-
 ENTRYPOINT ["/usr/bin/bootstrap"]
+# Provide the instruction to be run for each event
+CMD ["python", "handler.py"]
 ```
 
 In this example, it'll be up to the script `handler.py` to properly consider
@@ -165,6 +168,16 @@ queue triggering a Lambda function, with said queue only being fed events from
 S3 buckets. This may change in the future, possibly to consider other kinds of
 integrations with S3 (e.g. direct invocation, SNS publish/subscribe, etc.).
 
+## Usage as CLI wrapper
+
+Included in the release artifacts there's also a `command` utility that operates
+just like the lambda bootstrap binary, but as a one-shot utility for CLI
+programs.
+
+```bash
+env BUCKET=some-bucket KEY_PREFIX=some/prefix/of/keys/to/pull ./command python handler.py
+```
+
 ## Usage as glue for other AWS services
 
 > :warning: This isn't the intended use case for this utility, as the resulting
@@ -185,12 +198,12 @@ FROM debian:stable-slim
 RUN set -ex ; \
     apt-get update ; \
     apt-get install -y groff less curl unzip ; \
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ; \
+    curl https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip ; \
     unzip awscliv2.zip ; \
     ./aws/install ; \
     rm -r awscliv2.zip ./aws ; \
-    curl -L -o /usr/bin/bootstrap \
-         https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.3.1/bootstrap ; \
+    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.0/lambda-bootstrap \
+         -L -o /usr/bin/bootstrap ; \
     chmod +x /usr/bin/bootstrap ; \
     apt-get purge -y curl unzip ; \
     apt-get autoremove -y ; \
@@ -200,11 +213,11 @@ RUN set -ex ; \
 WORKDIR /app
 COPY command.sh ./
 
-ENV HANDLER_COMMAND="bash command.sh"
 # Don't pull any file from S3, since they're not needed
 ENV PULL_MATCH_KEYS="^$"
 
 ENTRYPOINT ["/usr/bin/bootstrap"]
+CMD ["bash", "command.sh"]
 ```
 
 And a script file `command.sh` like this:

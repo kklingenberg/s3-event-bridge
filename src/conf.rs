@@ -22,10 +22,8 @@ fn default_key_prefix_var() -> String {
 /// given as environment variables.
 #[derive(Deserialize)]
 pub struct Settings {
-    /// Defines a filter to select only matching keys. The star (*)
-    /// can be used as a wildcard matching any number of non-slash
-    /// characters. E.g. to match any file in a folder, use
-    /// `"folder/*"`. Omitting this will make it match any file.
+    /// Defines a filter to select only matching keys. Use regexes to
+    /// match object keys. Omitting this will make it match any file.
     #[serde(default)]
     pub match_key: Option<String>,
 
@@ -64,9 +62,6 @@ pub struct Settings {
     /// be the same bucket as the one in the triggering event.
     #[serde(default)]
     pub target_bucket: Option<String>,
-
-    /// Defines the command that will be executed.
-    pub handler_command: String,
 
     /// The environment variable populated with the temporary folder
     /// pulled from S3, to be passed to the handler command.

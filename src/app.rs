@@ -16,6 +16,8 @@ use serde::Serialize;
 use std::cmp::max;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
+use std::env::args_os;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -48,10 +50,10 @@ pub struct App {
     pub execution_filter_expr: Option<String>,
 
     /// The program that needs to be executed as the handler.
-    pub handler_command_program: String,
+    pub handler_command_program: OsString,
 
     /// The arguments passed to the executed handler program.
-    pub handler_command_args: VecDeque<String>,
+    pub handler_command_args: VecDeque<OsString>,
 }
 
 impl App {
@@ -110,15 +112,8 @@ impl App {
                 "Can't use both an execution filter expression and a file at the same time",
             )),
         }?;
-        // Parse handler command
-        let mut handler_command_args = VecDeque::from(
-            shell_words::split(&settings.handler_command).with_context(|| {
-                format!(
-                    "Failed to shell-split handler command {:?}",
-                    &settings.handler_command
-                )
-            })?,
-        );
+        // Gather handler command
+        let mut handler_command_args = VecDeque::from(args_os().skip(1).collect::<Vec<OsString>>());
         let handler_command_program = handler_command_args
             .pop_front()
             .ok_or(anyhow!("empty handler command"))?;
@@ -201,7 +196,7 @@ impl App {
         client: &'static aws_sdk_s3::Client,
     ) -> Result<()> {
         let base_dir = TempDir::new().context("Failed to create temporary directory")?;
-        let base_path = base_dir.into_path();
+        let base_path = base_dir.path();
         info!(
             path = ?base_path,
             "Created temporary directory to hold input and output files"
@@ -285,20 +280,20 @@ impl App {
 
         // Fourth: compute a signature for each file pulled
         let signatures = if target_bucket == batch.bucket {
-            compute_signatures(&base_path)
-                .with_context(|| format!("Failed to compute signatures in {:?}", &base_path))
+            compute_signatures(base_path)
+                .with_context(|| format!("Failed to compute signatures in {:?}", base_path))
         } else {
             empty_signatures()
         }?;
 
         // Fifth: invoke the handler program
         info!(
-            command = self.settings.handler_command,
-            "Invoking handler command"
+            "Invoking handler command {:?} {:?}",
+            &self.handler_command_program, &self.handler_command_args
         );
         let status = Command::new(&self.handler_command_program)
             .args(&self.handler_command_args)
-            .env(&self.settings.root_folder_var, &base_path)
+            .env(&self.settings.root_folder_var, base_path)
             .env(&self.settings.bucket_var, &batch.bucket)
             .env(&self.settings.key_prefix_var, &batch.prefix)
             .status()
@@ -316,11 +311,8 @@ impl App {
 
         // Sixth: upload the changed files
         let differences =
-            find_signature_differences(&base_path, &signatures).with_context(|| {
-                format!(
-                    "Failed to compute signature differences in {:?}",
-                    &base_path
-                )
+            find_signature_differences(base_path, &signatures).with_context(|| {
+                format!("Failed to compute signature differences in {:?}", base_path)
             })?;
         info!(
             total = differences.len(),
@@ -329,15 +321,14 @@ impl App {
         let mut joinset: JoinSet<Result<String>> = JoinSet::new();
         for path in differences {
             let bucket = target_bucket.clone();
-            let storage_key_path = Path::new(&batch.prefix).join(
-                path.strip_prefix(&base_path).with_context(|| {
+            let storage_key_path =
+                Path::new(&batch.prefix).join(path.strip_prefix(base_path).with_context(|| {
                     format!(
                         "Failed to convert local file path \
                          to bucket path for {:?} (using base path {:?})",
-                        path, &base_path
+                        path, base_path
                     )
-                })?,
-            );
+                })?);
             let storage_key = storage_key_path.to_string_lossy().to_string();
             joinset.spawn(async move {
                 info!(key = ?storage_key, "Uploading file");
