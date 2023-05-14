@@ -89,6 +89,7 @@ impl App {
             &settings.execution_filter_expr.clone().unwrap_or_default(),
             &settings.execution_filter_file.clone().unwrap_or_default(),
         ) {
+            (expr, filepath) if expr.is_empty() && filepath.is_empty() => Ok(None),
             (expr, filepath) if filepath.is_empty() => {
                 jq_rs::compile(expr).map_err(|e| {
                     anyhow!("Failed to compile execution filter expression: {:?}", e)
@@ -107,7 +108,6 @@ impl App {
                 })?;
                 Ok(Some(file_expr))
             }
-            (expr, filepath) if expr.is_empty() && filepath.is_empty() => Ok(None),
             _ => Err(anyhow!(
                 "Can't use both an execution filter expression and a file at the same time",
             )),

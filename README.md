@@ -129,7 +129,7 @@ COPY handler.py ./
 
 # Install the event bridge
 RUN set -ex ; \
-    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.0/lambda-bootstrap \
+    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.1/lambda-bootstrap \
          -L -o /usr/bin/bootstrap ; \
     chmod +x /usr/bin/bootstrap
 
@@ -202,7 +202,7 @@ RUN set -ex ; \
     unzip awscliv2.zip ; \
     ./aws/install ; \
     rm -r awscliv2.zip ./aws ; \
-    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.0/lambda-bootstrap \
+    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.1/lambda-bootstrap \
          -L -o /usr/bin/bootstrap ; \
     chmod +x /usr/bin/bootstrap ; \
     apt-get purge -y curl unzip ; \

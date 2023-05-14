@@ -55,6 +55,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "autotools"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aef8da1805e028a172334c3b680f93e71126f2327622faef2ec3d893c0a4ad77"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "aws-config"
 version = "0.55.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1022,11 +1031,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jq-src"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae23a0c161dda65b96213574a016d314bce32e7060b6587c1c7d3c612c66b4b5"
+dependencies = [
+ "autotools",
+]
+
+[[package]]
 name = "jq-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81b65b7e54bd2fffc8cb20cbcf19f40d3158dab5cf5b5adb1f65f9b35eba4c48"
 dependencies = [
+ "jq-src",
  "pkg-config",
 ]
 
@@ -1350,7 +1369,7 @@ checksum = "f91339c0467de62360649f8d3e185ca8de4224ff281f66000de5eb2a77a79041"
 
 [[package]]
 name = "s3-event-bridge"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "aws-config",

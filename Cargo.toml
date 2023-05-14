@@ -1,6 +1,6 @@
 [package]
 name = "s3-event-bridge"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 
 [profile.release]
@@ -18,7 +18,7 @@ aws_lambda_events = { version = "0.7.3", default-features = false, features = ["
 base64ct = { version = "1.6.0", features = ["alloc"] }
 chrono = { version = "0.4.24", features = ["serde"] }
 envy = "0.4.2"
-jq-rs = { version = "0.4.1" }
+jq-rs = { version = "0.4.1" , features = ["bundled"] }
 lambda_runtime = "0.7"
 once_cell = "1.17.1"
 regex = "1.7.1"
