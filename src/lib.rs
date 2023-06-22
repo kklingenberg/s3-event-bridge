@@ -1,4 +1,4 @@
 pub mod app;
 pub mod client;
-mod conf;
+pub mod conf;
 mod sign;

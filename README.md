@@ -175,7 +175,24 @@ just like the lambda bootstrap binary, but as a one-shot utility for CLI
 programs.
 
 ```bash
-env BUCKET=some-bucket KEY_PREFIX=some/prefix/of/keys/to/pull ./command python handler.py
+env BUCKET=some-bucket \
+    KEY_PREFIX=some/prefix/of/keys/to/pull \
+    ./command python handler.py
+```
+
+## Usage as a standalone SQS queue consumer
+
+Also included in the release artifacts there's a `sqs-consumer` utility that
+operates just like the other binaries, but invoking the specified handler
+program continuously every time a batch of SQS messages is received. The utility
+expects additional parameters that indicate the queue to consume and the way to
+consume it.
+
+```bash
+env SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account-id>/<queue-name> \
+    SQS_VISIBILITY_TIMEOUT=600 \
+    SQS_MAX_NUMBER_OF_MESSAGES=10 \
+    ./sqs-consumer python handler.py
 ```
 
 ## Usage as glue for other AWS services

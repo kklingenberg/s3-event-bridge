@@ -1,6 +1,8 @@
 //! Defines configuration as read from the environment.
 
+use once_cell::sync::OnceCell;
 use serde::Deserialize;
+use std::env;
 
 /// Default `root_folder_var` value.
 fn default_root_folder_var() -> String {
@@ -78,4 +80,36 @@ pub struct Settings {
     /// command.
     #[serde(default = "default_key_prefix_var")]
     pub key_prefix_var: String,
+}
+
+/// Global AWS configuration instance.
+static CURRENT_AWS_CONFIG: OnceCell<aws_config::SdkConfig> = OnceCell::new();
+
+/// Returns the singleton AWS configuration to use with service
+/// clients.
+pub async fn aws_service_config() -> &'static aws_config::SdkConfig {
+    if let Some(config) = CURRENT_AWS_CONFIG.get() {
+        config
+    } else {
+        let endpoint_url_var = env::var("AWS_ENDPOINT_URL");
+        let config = if let Ok(endpoint_url) = endpoint_url_var {
+            aws_config::from_env()
+                .endpoint_url(
+                    if endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://") {
+                        endpoint_url
+                    } else {
+                        format!("https://{}", endpoint_url)
+                    },
+                )
+                .region("us-east-1") // should be OK since the endpoint was overridden
+                .load()
+        } else {
+            aws_config::from_env().load()
+        }
+        .await;
+        CURRENT_AWS_CONFIG
+            .set(config)
+            .expect("Concurrent configuration of AWS services");
+        CURRENT_AWS_CONFIG.get().unwrap()
+    }
 }
