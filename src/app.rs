@@ -3,6 +3,7 @@
 
 use crate::client::{download, list_keys, upload};
 use crate::conf::Settings;
+use crate::jq;
 use crate::sign::{compute_signatures, empty_signatures, find_signature_differences};
 use anyhow::{anyhow, Context, Result};
 use aws_lambda_events::s3::S3EventRecord;
@@ -13,6 +14,7 @@ use envy::from_env;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::Serialize;
+use serde_json::{json, Value};
 use std::cmp::max;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -47,7 +49,7 @@ pub struct App {
     pub pull_match_key_res: Vec<Regex>,
 
     /// The execution filter expression to use on pulled objects.
-    pub execution_filter_expr: Option<String>,
+    pub execution_filter: Option<jq::Filter>,
 
     /// The program that needs to be executed as the handler.
     pub handler_command_program: OsString,
@@ -85,28 +87,28 @@ impl App {
             pull_match_key_res.push(Regex::new("")?)
         }
         // Compile execution filter, to catch syntax errors early
-        let execution_filter_expr = match (
+        let execution_filter = match (
             &settings.execution_filter_expr.clone().unwrap_or_default(),
             &settings.execution_filter_file.clone().unwrap_or_default(),
         ) {
             (expr, filepath) if expr.is_empty() && filepath.is_empty() => Ok(None),
             (expr, filepath) if filepath.is_empty() => {
-                jq_rs::compile(expr).map_err(|e| {
+                let f = jq::compile(expr).map_err(|e| {
                     anyhow!("Failed to compile execution filter expression: {:?}", e)
                 })?;
-                Ok(Some(expr.clone()))
+                Ok(Some(f))
             }
             (expr, filepath) if expr.is_empty() => {
                 let file_expr = fs::read_to_string(filepath).with_context(|| {
                     format!("Failed to read execution filter file: {:?}", filepath)
                 })?;
-                jq_rs::compile(&file_expr).map_err(|e| {
+                let f = jq::compile(&file_expr).map_err(|e| {
                     anyhow!(
                         "Failed to compile execution filter expression within file: {:?}",
                         e
                     )
                 })?;
-                Ok(Some(file_expr))
+                Ok(Some(f))
             }
             _ => Err(anyhow!(
                 "Can't use both an execution filter expression and a file at the same time",
@@ -122,7 +124,7 @@ impl App {
             settings,
             match_key_re,
             pull_match_key_res,
-            execution_filter_expr,
+            execution_filter,
             handler_command_program,
             handler_command_args,
         })
@@ -229,20 +231,25 @@ impl App {
         }
 
         // Second: run the filter expression on all candidate objects
-        if let Some(execution_filter_expr) = &self.execution_filter_expr {
+        if let Some(execution_filter) = &self.execution_filter {
             info!("Evaluating execution filter");
             let execution_filter_result = serialize_objects(&pending_objects)
                 .context("Failed to serialize objects for execution filter")
-                .and_then(|input| {
-                    jq_rs::run(execution_filter_expr, &input)
-                        .map_err(|e| anyhow!("Execution filter failed during evaluation: {:?}", e))
-                })?;
-            if execution_filter_result == "false\n" {
-                info!(
-                    "Execution filter returned 'false'; stopping before download of {:?} files",
-                    pending_objects.len()
-                );
-                return Ok(());
+                .map(|input| jq::first_result(execution_filter, input))?;
+            match execution_filter_result {
+                Some(Ok(v)) if v == json!(false) => {
+                    info!(
+                        "Execution filter returned 'false'; stopping before download of {:?} files",
+                        pending_objects.len()
+                    );
+                    return Ok(());
+                }
+                None => {
+                    info!("Execution filter didn't return values");
+                }
+                Some(v) => {
+                    info!("Execution filter returned: '{:?}'", v);
+                }
             }
         }
 
@@ -431,10 +438,10 @@ impl<'fields> SerializableObject<'fields> {
 /// Serializes a vector of S3 objects as an input to the execution
 /// filter. Reference:
 /// https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html
-fn serialize_objects(objects: &[Object]) -> Result<String> {
+fn serialize_objects(objects: &[Object]) -> Result<Value> {
     let converted = objects
         .iter()
         .map(SerializableObject::from_object)
         .collect::<Vec<SerializableObject>>();
-    serde_json::to_string(&converted).context("Failed serialization of S3 objects")
+    serde_json::to_value(converted).context("Failed serialization of S3 objects")
 }
