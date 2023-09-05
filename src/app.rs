@@ -15,16 +15,16 @@ use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::cmp::max;
-use std::collections::BTreeSet;
-use std::collections::VecDeque;
-use std::env::args_os;
-use std::ffi::OsString;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    cmp::max,
+    collections::{BTreeSet, VecDeque},
+    env::args_os,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 use tempfile::TempDir;
-use tokio::process::Command;
-use tokio::task::JoinSet;
+use tokio::{process::Command, task::JoinSet};
 use tracing::{info, instrument, warn};
 
 /// A batch of S3 events that share a key prefix and represent objects

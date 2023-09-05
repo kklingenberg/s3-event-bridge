@@ -4,10 +4,12 @@
 use anyhow::{Context, Result};
 use base64ct::{Base64, Encoding};
 use sha1::{Digest, Sha1};
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::copy;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::copy,
+    path::{Path, PathBuf},
+};
 
 /// Visit files within `dir`. Source:
 /// https://doc.rust-lang.org/stable/std/fs/fn.read_dir.html

@@ -2,13 +2,13 @@
 
 use crate::conf::aws_service_config;
 use anyhow::{anyhow, Context, Result};
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::Object;
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{primitives::ByteStream, types::Object, Client};
 use once_cell::sync::OnceCell;
 use std::path::Path;
-use tokio::fs::{create_dir_all, File};
-use tokio::io::copy;
+use tokio::{
+    fs::{create_dir_all, File},
+    io::copy,
+};
 
 /// Lists all keys found in a bucket under a given prefix. Returns a
 /// page of keys and a token that can be used for a subsequent fetch.

@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use aws_lambda_events::event::s3::S3Event;
-use aws_lambda_events::event::sqs::SqsEventObj;
+use aws_lambda_events::event::{s3::S3Event, sqs::SqsEventObj};
 use lambda_runtime::{run, service_fn, LambdaEvent};
 use s3_event_bridge::{app, client};
 

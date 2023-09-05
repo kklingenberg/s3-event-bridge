@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
-use aws_sdk_sqs::Client;
+use aws_sdk_sqs::{types::DeleteMessageBatchRequestEntry, Client};
 use core::time::Duration;
 use s3_event_bridge::{app, client, conf};
 use std::env::var;
@@ -12,6 +11,10 @@ const BASE_LAPSE_TIME: u64 = 300;
 
 /// The base of the exponential backoff sequence.
 const BACKOFF_BASE: u64 = 2;
+
+/// The maximum amount of milliseconds to sleep between ticks. Set to
+/// the equivalent of 20 minutes.
+const MAX_SLEEP: u64 = 1200000;
 
 /// Wrapper structure that executes successive SQS consumption cycles:
 /// receive messages, parse their contents, assemble event batches,
@@ -33,9 +36,10 @@ impl SQSConsumer {
 
     /// Record a failure and wait a while.
     async fn fail(&mut self) {
-        sleep(Duration::from_millis(
+        sleep(Duration::from_millis(std::cmp::min(
             BASE_LAPSE_TIME.saturating_mul(BACKOFF_BASE.saturating_pow(self.backoff)),
-        ))
+            MAX_SLEEP,
+        )))
         .await;
         self.backoff = self.backoff.saturating_add(1);
     }
