@@ -21,11 +21,11 @@ use std::collections::VecDeque;
 use std::env::args_os;
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::task::JoinSet;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 /// A batch of S3 events that share a key prefix and represent objects
 /// that belong to the same bucket.
@@ -190,6 +190,120 @@ impl App {
             .collect()
     }
 
+    /// List the input objects before any filtering.
+    async fn list_input_objects(
+        &self,
+        batch: &EventBatch,
+        client: &'static aws_sdk_s3::Client,
+    ) -> Result<Vec<Object>> {
+        let mut next = None;
+        let mut objects = Vec::new();
+        loop {
+            let (page, next_token) = list_keys(client, &batch.bucket, &batch.prefix, &next)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to list keys under {:?} in bucket {:?}",
+                        &batch.prefix, &batch.bucket
+                    )
+                })?;
+            objects.extend(page);
+            if next_token.is_none() {
+                break;
+            } else {
+                next = next_token;
+            }
+        }
+        Ok(objects)
+    }
+
+    /// Run the execution filter with the given objects as inputs.
+    async fn evaluate_execution_filter(&self, objects: &[Object]) -> Result<Option<Result<Value>>> {
+        if let Some(filter) = &self.execution_filter {
+            serialize_objects(objects)
+                .context("Failed to serialize objects for execution filter")
+                .map(|input| jq::first_result(filter, input))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Download all matching objects to the given path.
+    async fn download_objects(
+        &self,
+        batch: &EventBatch,
+        client: &'static aws_sdk_s3::Client,
+        target_path: &Path,
+        objects: &[Object],
+    ) -> Result<()> {
+        let mut joinset: JoinSet<Result<String>> = JoinSet::new();
+        for obj in objects.iter().filter(|obj| {
+            self.pull_match_key_res.iter().any(|re| {
+                if let Some(k) = obj.key() {
+                    re.is_match(k)
+                } else {
+                    false
+                }
+            })
+        }) {
+            let bucket = batch.bucket.clone();
+            let obj_key = obj.key().unwrap_or_default().to_string();
+            let filename = obj_key.strip_prefix(&batch.prefix).unwrap_or(&obj_key);
+            let local_path = target_path.join(filename);
+            joinset.spawn(async move {
+                download(client, &bucket, &obj_key, &local_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to download object {:?} from bucket {:?}",
+                            &obj_key, &bucket
+                        )
+                    })?;
+                Ok(obj_key)
+            });
+        }
+        while let Some(downloaded_obj_key) = joinset.join_next().await {
+            info!("Downloaded {:?}", downloaded_obj_key??);
+        }
+        Ok(())
+    }
+
+    /// Upload all given objects to the target bucket.
+    async fn upload_objects(
+        &self,
+        batch: &EventBatch,
+        client: &'static aws_sdk_s3::Client,
+        base_path: &Path,
+        target_bucket: &str,
+        paths: &[PathBuf],
+    ) -> Result<()> {
+        let mut joinset: JoinSet<Result<String>> = JoinSet::new();
+        for path in paths {
+            let path = path.clone();
+            let bucket = target_bucket.to_owned();
+            let storage_key_path =
+                Path::new(&batch.prefix).join(path.strip_prefix(base_path).with_context(|| {
+                    format!(
+                        "Failed to convert local file path \
+                         to bucket path for {:?} (using base path {:?})",
+                        path, base_path
+                    )
+                })?);
+            let storage_key = storage_key_path.to_string_lossy().to_string();
+            joinset.spawn(async move {
+                info!(key = ?storage_key, "Uploading file");
+                upload(client, &bucket, &path, &storage_key)
+                    .await
+                    .with_context(|| format!("Failed to upload file to {:?}", &storage_key))?;
+                Ok(storage_key)
+            });
+        }
+        while let Some(uploaded_obj_key) = joinset.join_next().await {
+            info!("Uploaded {:?}", uploaded_obj_key??);
+        }
+        Ok(())
+    }
+
     /// Handle a batch of S3 event records.
     #[instrument(skip(self, client))]
     pub async fn handle(
@@ -211,79 +325,27 @@ impl App {
 
         // First: list all relevant objects from S3
         info!("Listing input objects");
-        let mut next = None;
-        let mut pending_objects = Vec::new();
-        loop {
-            let (page, next_token) = list_keys(client, &batch.bucket, &batch.prefix, &next)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to list keys under {:?} in bucket {:?}",
-                        &batch.prefix, &batch.bucket
-                    )
-                })?;
-            pending_objects.extend(page);
-            if next_token.is_none() {
-                break;
-            } else {
-                next = next_token;
-            }
-        }
+        let pending_objects = self.list_input_objects(batch, client).await?;
 
         // Second: run the filter expression on all candidate objects
-        if let Some(execution_filter) = &self.execution_filter {
-            info!("Evaluating execution filter");
-            let execution_filter_result = serialize_objects(&pending_objects)
-                .context("Failed to serialize objects for execution filter")
-                .map(|input| jq::first_result(execution_filter, input))?;
-            match execution_filter_result {
-                Some(Ok(v)) if v == json!(false) => {
-                    info!(
-                        "Execution filter returned 'false'; stopping before download of {:?} files",
-                        pending_objects.len()
-                    );
-                    return Ok(());
-                }
-                None => {
-                    info!("Execution filter didn't return values");
-                }
-                Some(v) => {
-                    info!("Execution filter returned: '{:?}'", v);
-                }
+        info!("Evaluating execution filter");
+        match self.evaluate_execution_filter(&pending_objects).await? {
+            Some(Ok(v)) if v == json!(false) => {
+                info!(
+                    "Execution filter returned 'false'; stopping before download of {:?} files",
+                    pending_objects.len()
+                );
+                return Ok(());
+            }
+            _ => {
+                info!("Execution filter didn't return 'false'; proceeding to download");
             }
         }
 
         // Third: pull all relevant files
         info!("Downloading input objects");
-        let mut joinset: JoinSet<Result<String>> = JoinSet::new();
-        for obj in pending_objects.into_iter().filter(|obj| {
-            self.pull_match_key_res.iter().any(|re| {
-                if let Some(k) = obj.key() {
-                    re.is_match(k)
-                } else {
-                    false
-                }
-            })
-        }) {
-            let bucket = batch.bucket.clone();
-            let obj_key = obj.key().unwrap_or_default().to_string();
-            let filename = obj_key.strip_prefix(&batch.prefix).unwrap_or(&obj_key);
-            let local_path = base_path.join(filename);
-            joinset.spawn(async move {
-                download(client, &bucket, &obj_key, &local_path)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to download object {:?} from bucket {:?}",
-                            &obj_key, &bucket
-                        )
-                    })?;
-                Ok(obj_key)
-            });
-        }
-        while let Some(downloaded_obj_key) = joinset.join_next().await {
-            info!("Downloaded {:?}", downloaded_obj_key??);
-        }
+        self.download_objects(batch, client, base_path, &pending_objects)
+            .await?;
 
         // Fourth: compute a signature for each file pulled
         let signatures = if target_bucket == batch.bucket {
@@ -312,7 +374,7 @@ impl App {
                 )
             })?;
         if !status.success() {
-            info!(status = ?status, "Handler command was not successful");
+            warn!(status = ?status, "Handler command was not successful");
             return Ok(());
         }
 
@@ -325,29 +387,8 @@ impl App {
             total = differences.len(),
             "Uploading files with found differences"
         );
-        let mut joinset: JoinSet<Result<String>> = JoinSet::new();
-        for path in differences {
-            let bucket = target_bucket.clone();
-            let storage_key_path =
-                Path::new(&batch.prefix).join(path.strip_prefix(base_path).with_context(|| {
-                    format!(
-                        "Failed to convert local file path \
-                         to bucket path for {:?} (using base path {:?})",
-                        path, base_path
-                    )
-                })?);
-            let storage_key = storage_key_path.to_string_lossy().to_string();
-            joinset.spawn(async move {
-                info!(key = ?storage_key, "Uploading file");
-                upload(client, &bucket, &path, &storage_key)
-                    .await
-                    .with_context(|| format!("Failed to upload file to {:?}", &storage_key))?;
-                Ok(storage_key)
-            });
-        }
-        while let Some(uploaded_obj_key) = joinset.join_next().await {
-            info!("Uploaded {:?}", uploaded_obj_key??);
-        }
+        self.upload_objects(batch, client, base_path, &target_bucket, &differences)
+            .await?;
 
         // Done
         Ok(())

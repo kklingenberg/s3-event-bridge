@@ -58,7 +58,7 @@ Configuration is achieved via the following environment variables:
   must evaluate to a single value. **If the value it produces is not explicitly
   `false`, it will continue with the execution of the handler program**. Only
   one of these variables may be defined, and if both are omitted or left blank,
-  they default to the equivalent of a constant `true` jq expression.
+  they default to the equivalent of a constant `empty` jq expression.
 - `TARGET_BUCKET` is the bucket name that will receive outputs. If omitted, it
   will default to the same bucket as the one specified in the original event.
 - `ROOT_FOLDER_VAR` is the name of the environment variable that will be
