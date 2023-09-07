@@ -17,7 +17,7 @@ aws-sdk-sqs = "0.30.0"
 aws-smithy-types-convert = { version = "0.56.1", features = ["convert-chrono"] }
 aws_lambda_events = { version = "0.10.0", default-features = false, features = ["s3", "sqs"] }
 base64ct = { version = "1.6.0", features = ["alloc"] }
-chrono = { version = "0.4.28", features = ["serde"] }
+chrono = { version = "0.4.30", features = ["serde"] }
 envy = "0.4.2"
 jaq-interpret = { git = "https://github.com/01mf02/jaq.git", tag = "v1.0.0-gamma" }
 jaq-core = { git = "https://github.com/01mf02/jaq.git", tag = "v1.0.0-gamma" }
