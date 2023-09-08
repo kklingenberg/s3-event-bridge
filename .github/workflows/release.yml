@@ -1,0 +1,165 @@
+# Heavily based on
+# https://github.com/Nukesor/pueue/blob/4cb610d1da60206806d43180e8d78934a690deb8/.github/workflows/package-binary.yml
+
+name: Build binaries
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: Build binaries on ${{ matrix.os }} for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - armv7-unknown-linux-musleabihf
+          - arm-unknown-linux-musleabihf
+          - x86_64-pc-windows-msvc
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            lambda_bootstrap_artifact_name: target/x86_64-unknown-linux-musl/release/lambda-bootstrap
+            command_artifact_name: target/x86_64-unknown-linux-musl/release/command
+            sqs_consumer_artifact_name: target/x86_64-unknown-linux-musl/release/sqs-consumer
+            lambda_bootstrap_release_name: lambda-bootstrap-linux-x86_64
+            command_release_name: command-linux-x86_64
+            sqs_consumer_release_name: sqs-consumer-linux-x86_64
+            cross: true
+            strip: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            lambda_bootstrap_artifact_name: target/aarch64-unknown-linux-musl/release/lambda-bootstrap
+            command_artifact_name: target/aarch64-unknown-linux-musl/release/command
+            sqs_consumer_artifact_name: target/aarch64-unknown-linux-musl/release/sqs-consumer
+            lambda_bootstrap_release_name: lambda-bootstrap-linux-aarch64
+            command_release_name: command-linux-aarch64
+            sqs_consumer_release_name: sqs-consumer-linux-aarch64
+            cross: true
+            strip: false
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+            lambda_bootstrap_artifact_name: target/armv7-unknown-linux-musleabihf/release/lambda-bootstrap
+            command_artifact_name: target/armv7-unknown-linux-musleabihf/release/command
+            sqs_consumer_artifact_name: target/armv7-unknown-linux-musleabihf/release/sqs-consumer
+            lambda_bootstrap_release_name: lambda-bootstrap-linux-armv7
+            command_release_name: command-linux-armv7
+            sqs_consumer_release_name: sqs-consumer-linux-armv7
+            cross: true
+            strip: false
+          - os: ubuntu-latest
+            target: arm-unknown-linux-musleabihf
+            lambda_bootstrap_artifact_name: target/arm-unknown-linux-musleabihf/release/lambda-bootstrap
+            command_artifact_name: target/arm-unknown-linux-musleabihf/release/command
+            sqs_consumer_artifact_name: target/arm-unknown-linux-musleabihf/release/sqs-consumer
+            lambda_bootstrap_release_name: lambda-bootstrap-linux-arm
+            command_release_name: command-linux-arm
+            sqs_consumer_release_name: sqs-consumer-linux-arm
+            cross: true
+            strip: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            lambda_bootstrap_artifact_name: target/x86_64-pc-windows-msvc/release/lambda-bootstrap.exe
+            command_artifact_name: target/x86_64-pc-windows-msvc/release/command.exe
+            sqs_consumer_artifact_name: target/x86_64-pc-windows-msvc/release/sqs-consumer.exe
+            lambda_bootstrap_release_name: lambda-bootstrap-windows-x86_64.exe
+            command_release_name: command-windows-x86_64.exe
+            sqs_consumer_release_name: sqs-consumer-windows-x86_64.exe
+            cross: false
+            strip: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            lambda_bootstrap_artifact_name: target/x86_64-apple-darwin/release/lambda-bootstrap
+            command_artifact_name: target/x86_64-apple-darwin/release/command
+            sqs_consumer_artifact_name: target/x86_64-apple-darwin/release/sqs-consumer
+            lambda_bootstrap_release_name: lambda-bootstrap-macos-x86_64
+            command_release_name: command-macos-x86_64
+            sqs_consumer_release_name: sqs-consumer-macos-x86_64
+            cross: false
+            strip: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            lambda_bootstrap_artifact_name: target/aarch64-apple-darwin/release/lambda-bootstrap
+            command_artifact_name: target/aarch64-apple-darwin/release/command
+            sqs_consumer_artifact_name: target/aarch64-apple-darwin/release/sqs-consumer
+            lambda_bootstrap_release_name: lambda-bootstrap-darwin-aarch64
+            command_release_name: command-darwin-aarch64
+            sqs_consumer_release_name: sqs-consumer-darwin-aarch64
+            cross: false
+            strip: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --locked --target=${{ matrix.target }}
+          use-cross: ${{ matrix.cross }}
+
+      - name: Compress lambda-bootstrap
+        uses: svenstaro/upx-action@v2
+        with:
+          file: ${{ matrix.lambda_bootstrap_artifact_name }}
+          args: --lzma
+          strip: ${{ matrix.strip }}
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+
+      - name: Compress command
+        uses: svenstaro/upx-action@v2
+        with:
+          file: ${{ matrix.command_artifact_name }}
+          args: --lzma
+          strip: ${{ matrix.strip }}
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+
+      - name: Compress sqs-consumer
+        uses: svenstaro/upx-action@v2
+        with:
+          file: ${{ matrix.sqs_consumer_artifact_name }}
+          args: --lzma
+          strip: ${{ matrix.strip }}
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+
+      - name: Upload lambda-bootstram binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ matrix.lambda_bootstrap_artifact_name }}
+          asset_name: ${{ matrix.lambda_bootstrap_release_name }}
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - name: Upload command binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ matrix.command_artifact_name }}
+          asset_name: ${{ matrix.command_release_name }}
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - name: Upload sqs-consumer binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ matrix.sqs_consumer_artifact_name }}
+          asset_name: ${{ matrix.sqs_consumer_release_name }}
+          tag: ${{ github.ref }}
+          overwrite: true

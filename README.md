@@ -128,9 +128,9 @@ WORKDIR /app
 COPY handler.py ./
 
 # Install the event bridge
+ARG bootstrap_url=https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.5.0/lambda-bootstrap-linux-x86_64
 RUN set -ex ; \
-    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.1/lambda-bootstrap \
-         -L -o /usr/bin/bootstrap ; \
+    curl "${bootstrap_url}" -L -o /usr/bin/bootstrap ; \
     chmod +x /usr/bin/bootstrap
 
 ENTRYPOINT ["/usr/bin/bootstrap"]
@@ -212,6 +212,8 @@ the docker image:
 ```dockerfile
 FROM debian:stable-slim
 
+ARG bootstrap_url=https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.5.0/lambda-bootstrap-linux-x86_64
+
 RUN set -ex ; \
     apt-get update ; \
     apt-get install -y groff less curl unzip ; \
@@ -219,8 +221,7 @@ RUN set -ex ; \
     unzip awscliv2.zip ; \
     ./aws/install ; \
     rm -r awscliv2.zip ./aws ; \
-    curl https://github.com/kklingenberg/s3-event-bridge/releases/download/v0.4.1/lambda-bootstrap \
-         -L -o /usr/bin/bootstrap ; \
+    curl "${bootstrap_url}" -L -o /usr/bin/bootstrap ; \
     chmod +x /usr/bin/bootstrap ; \
     apt-get purge -y curl unzip ; \
     apt-get autoremove -y ; \
