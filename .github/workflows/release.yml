@@ -137,7 +137,7 @@ jobs:
           strip: ${{ matrix.strip }}
         if: matrix.target != 'x86_64-pc-windows-msvc'
 
-      - name: Upload lambda-bootstram binaries to release
+      - name: Upload lambda-bootstrap binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
