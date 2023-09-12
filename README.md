@@ -30,6 +30,18 @@ For each lambda invocation, the following steps happen in order:
    from the one in step 2 causes the event bridge to upload the files to S3 (to
    the same bucket, or a new one).
 
+The intended use involves bridging S3 events through SQS queues (or SNS topics
+connected to SQS queues). The SQS queue is in turn connected as a Lambda trigger. 
+
+```mermaid
+graph TD;
+    S3Source[("S3\nsource bucket")]-- "0. Emit native S3 event" -->SQS;
+    SQS-- "1. Receive trigger and\nassemble batches of events" -->Lambda("Lambda\ns3-event-bridge");
+    Lambda-- "2. Download objects as inputs" -->S3Source;
+    Lambda-- "3. Invoke handler program" -->Lambda;
+    Lambda-- 4. Upload outputs -->S3Target[("S3\ntarget bucket")];
+```
+
 ## Configuration
 
 Configuration is achieved via the following environment variables:
