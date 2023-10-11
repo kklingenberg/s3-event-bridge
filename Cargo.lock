@@ -1182,8 +1182,9 @@ checksum = "af150ab688ff2122fcef229be89cb50dd66af9e01a4ff320cc137eecc9bacc38"
 
 [[package]]
 name = "jaq-core"
-version = "1.0.0-gamma"
-source = "git+https://github.com/01mf02/jaq.git?tag=v1.0.0-gamma#8e4975d50041c70c970d2d13ac0ab1be8abc123b"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a687c6c2c978bc3ac51e3eda316106b8d74c6f14453b2975b381fd8bbec53f8"
 dependencies = [
  "aho-corasick",
  "base64",
@@ -1199,8 +1200,9 @@ dependencies = [
 
 [[package]]
 name = "jaq-interpret"
-version = "1.0.0-gamma"
-source = "git+https://github.com/01mf02/jaq.git?tag=v1.0.0-gamma#8e4975d50041c70c970d2d13ac0ab1be8abc123b"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5aa38a2d356f62f9374e8370e6f00eff737943cae604a25a0a865cf779f9504"
 dependencies = [
  "ahash",
  "dyn-clone",
@@ -1214,8 +1216,9 @@ dependencies = [
 
 [[package]]
 name = "jaq-parse"
-version = "1.0.0-gamma"
-source = "git+https://github.com/01mf02/jaq.git?tag=v1.0.0-gamma#8e4975d50041c70c970d2d13ac0ab1be8abc123b"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1299e99162b9330dec195c43a68fb624706a0be46b735888ee3ae9e56320090e"
 dependencies = [
  "chumsky",
  "jaq-syn",
@@ -1223,8 +1226,9 @@ dependencies = [
 
 [[package]]
 name = "jaq-std"
-version = "1.0.0-gamma"
-source = "git+https://github.com/01mf02/jaq.git?tag=v1.0.0-gamma#8e4975d50041c70c970d2d13ac0ab1be8abc123b"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "776b774728fcddf6d9d0cc4c4b697e50d2afd563aa27274fb0c585482e7f8bab"
 dependencies = [
  "bincode",
  "jaq-parse",
@@ -1233,8 +1237,9 @@ dependencies = [
 
 [[package]]
 name = "jaq-syn"
-version = "1.0.0-gamma"
-source = "git+https://github.com/01mf02/jaq.git?tag=v1.0.0-gamma#8e4975d50041c70c970d2d13ac0ab1be8abc123b"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baeb0b20f781d00983f7687eee3d1450626a34eb625a4641cd4f17355166e9f9"
 dependencies = [
  "serde",
 ]
